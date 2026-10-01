@@ -135,6 +135,7 @@ export function saveState(cwd, state) {
     }
     removeJobFile(resolveJobFile(cwd, job.id));
     removeFileIfExists(job.logFile);
+    removeFileIfExists(resolveCancelMarkerFile(cwd, job.id));
   }
 
   writeJsonAtomic(resolveStateFile(cwd), nextState);
@@ -209,6 +210,21 @@ function removeJobFile(jobFile) {
 export function resolveJobLogFile(cwd, jobId) {
   ensureStateDir(cwd);
   return path.join(resolveJobsDir(cwd), `${jobId}.log`);
+}
+
+// Cancellation is recorded in its own marker file because job JSON files are rewritten by the
+// worker; a marker can only be created, so a later status write can never erase a cancel.
+export function resolveCancelMarkerFile(cwd, jobId) {
+  ensureStateDir(cwd);
+  return path.join(resolveJobsDir(cwd), `${jobId}.cancelled`);
+}
+
+export function markJobCancelled(cwd, jobId) {
+  fs.writeFileSync(resolveCancelMarkerFile(cwd, jobId), `${new Date().toISOString()}\n`, "utf8");
+}
+
+export function isJobCancelMarked(cwd, jobId) {
+  return fs.existsSync(resolveCancelMarkerFile(cwd, jobId));
 }
 
 export function resolveJobFile(cwd, jobId) {

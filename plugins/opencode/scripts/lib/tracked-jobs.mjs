@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import process from "node:process";
 
-import { readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
+import { isJobCancelMarked, readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
 
 export const SESSION_ID_ENV = "OPENCODE_COMPANION_SESSION_ID";
 
@@ -152,8 +152,17 @@ function readStoredJobOrNull(workspaceRoot, jobId) {
 
 // Cancel and SessionEnd may finish a job while its runner is still unwinding; their state wins.
 function wasCancelled(workspaceRoot, jobId) {
+  if (isJobCancelMarked(workspaceRoot, jobId)) {
+    return true;
+  }
   const stored = readStoredJobOrNull(workspaceRoot, jobId);
   return stored?.status === "cancelled";
+}
+
+function restoreCancelledRecord(workspaceRoot, jobId, record) {
+  const cancelled = { status: "cancelled", phase: "cancelled", pid: null, runnerPid: null };
+  writeJobFile(workspaceRoot, jobId, { ...record, ...cancelled });
+  upsertJob(workspaceRoot, { id: jobId, ...cancelled });
 }
 
 export async function runTrackedJob(job, runner, options = {}) {
@@ -170,6 +179,12 @@ export async function runTrackedJob(job, runner, options = {}) {
   };
   writeJobFile(job.workspaceRoot, job.id, runningRecord);
   upsertJob(job.workspaceRoot, runningRecord);
+  // Cancel marks the job before it looks up the pid to kill. Checking again after publishing our
+  // pid closes the window: either cancel saw this pid and will stop us, or we see its marker here.
+  if (isJobCancelMarked(job.workspaceRoot, job.id)) {
+    restoreCancelledRecord(job.workspaceRoot, job.id, runningRecord);
+    throw new Error(`Job ${job.id} was cancelled before it started.`);
+  }
 
   try {
     const execution = await runner();

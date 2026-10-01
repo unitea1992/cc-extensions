@@ -30,6 +30,7 @@ import {
   generateJobId,
   getConfig,
   listJobs,
+  markJobCancelled,
   setConfig,
   upsertJob,
   writeJobFile
@@ -887,8 +888,12 @@ async function handleCancel(argv) {
 
   const cwd = resolveCommandCwd(options);
   const reference = positionals[0] ?? "";
-  const { workspaceRoot, job } = resolveCancelableJob(cwd, reference, { env: process.env });
-  const existing = readStoredJob(workspaceRoot, job.id) ?? {};
+  const { workspaceRoot, job: resolvedJob } = resolveCancelableJob(cwd, reference, { env: process.env });
+  // Mark first, then read the pids: a worker that starts concurrently either publishes its pid
+  // before this read (and is killed below) or sees the marker and stops itself.
+  markJobCancelled(workspaceRoot, resolvedJob.id);
+  const existing = readStoredJob(workspaceRoot, resolvedJob.id) ?? {};
+  const job = { ...resolvedJob, pid: existing.pid ?? resolvedJob.pid ?? null };
   const runnerPid = existing.runnerPid ?? job.runnerPid ?? null;
 
   // Stop the worker first so it cannot record the interrupted run as failed, then make sure the

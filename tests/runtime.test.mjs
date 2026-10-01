@@ -2056,3 +2056,33 @@ test("a background job cancelled before its worker starts never runs", () => {
   const stored = JSON.parse(fs.readFileSync(path.join(jobsDir, "task-early.json"), "utf8"));
   assert.equal(stored.status, "cancelled");
 });
+
+test("a worker racing a cancel stops when the cancel marker exists even though the job still looks queued", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeOpencode(binDir);
+  initGitRepo(repo);
+  const stateDir = resolveStateDir(repo);
+  const jobsDir = path.join(stateDir, "jobs");
+  fs.mkdirSync(jobsDir, { recursive: true });
+  const job = {
+    id: "task-race",
+    status: "queued",
+    phase: "queued",
+    pid: null,
+    title: "OpenCode Task",
+    jobClass: "task",
+    workspaceRoot: repo,
+    request: { cwd: repo, prompt: "write things", write: true, jobId: "task-race" }
+  };
+  fs.writeFileSync(path.join(jobsDir, "task-race.json"), JSON.stringify(job), "utf8");
+  fs.writeFileSync(path.join(stateDir, "state.json"), JSON.stringify({ version: 1, config: { stopReviewGate: false }, jobs: [job] }), "utf8");
+  // Cancel has marked the job but not yet saved the cancelled status.
+  fs.writeFileSync(path.join(jobsDir, "task-race.cancelled"), "now\n", "utf8");
+
+  run("node", [SCRIPT, "task-worker", "--cwd", repo, "--job-id", "task-race"], { cwd: repo, env: buildEnv(binDir) });
+  assert.equal(fs.existsSync(path.join(binDir, "fake-opencode-state.json")), false, "OpenCode must not be started");
+  const stored = JSON.parse(fs.readFileSync(path.join(jobsDir, "task-race.json"), "utf8"));
+  assert.notEqual(stored.status, "running");
+  assert.notEqual(stored.status, "completed");
+});
