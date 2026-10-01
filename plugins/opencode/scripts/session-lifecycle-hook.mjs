@@ -71,7 +71,7 @@ function cleanupSessionJobs(cwd, sessionId) {
 
   // Jobs live in their own files, so removing this session's files cannot touch other sessions.
   for (const job of removedJobs) {
-    removeJobArtifacts(workspaceRoot, job);
+    removeJobArtifacts(workspaceRoot, job, { keepCancelMarker: true });
   }
   removeLegacySessionJobs(workspaceRoot, sessionId);
 }

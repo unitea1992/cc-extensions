@@ -1487,8 +1487,9 @@ test("session end fully cleans up jobs for the ending session", async (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fs.existsSync(otherSessionLog), true);
   assert.equal(fs.existsSync(otherJobFile), true);
+  // Only the other session's files remain, plus a tombstone for the stopped running job.
   assert.deepEqual(
-    fs.readdirSync(path.dirname(otherJobFile)).sort(),
+    fs.readdirSync(path.dirname(otherJobFile)).filter((name) => !name.endsWith(".cancelled")).sort(),
     [path.basename(otherJobFile), path.basename(otherSessionLog)].sort()
   );
 
@@ -2100,4 +2101,40 @@ test("a worker racing a cancel stops when the cancel marker exists even though t
   assert.equal(loadState(repo).jobs.find((entry) => entry.id === "task-race").status, "cancelled");
   const status = JSON.parse(run("node", [SCRIPT, "status", "task-race", "--json"], { cwd: repo, env: buildEnv(binDir) }).stdout);
   assert.equal(status.job.status, "cancelled");
+});
+
+test("a queued worker whose session already ended never runs", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeOpencode(binDir);
+  initGitRepo(repo);
+  const stateDir = resolveStateDir(repo);
+  const jobsDir = path.join(stateDir, "jobs");
+  fs.mkdirSync(jobsDir, { recursive: true });
+  const job = {
+    id: "task-ended",
+    status: "queued",
+    phase: "queued",
+    pid: null,
+    sessionId: "sess-ended",
+    title: "OpenCode Task",
+    jobClass: "task",
+    workspaceRoot: repo,
+    request: { cwd: repo, prompt: "write things", write: true, jobId: "task-ended" }
+  };
+  fs.writeFileSync(path.join(jobsDir, "task-ended.json"), JSON.stringify(job), "utf8");
+
+  const hook = run("node", [SESSION_HOOK, "SessionEnd"], {
+    cwd: repo,
+    env: buildEnv(binDir),
+    input: JSON.stringify({ hook_event_name: "SessionEnd", session_id: "sess-ended", cwd: repo })
+  });
+  assert.equal(hook.status, 0, hook.stderr);
+  assert.equal(fs.existsSync(path.join(jobsDir, "task-ended.json")), false);
+  assert.equal(fs.existsSync(path.join(jobsDir, "task-ended.cancelled")), true, "SessionEnd leaves a tombstone");
+
+  // The worker had already read its request before SessionEnd deleted the job file.
+  fs.writeFileSync(path.join(jobsDir, "task-ended.json"), JSON.stringify(job), "utf8");
+  run("node", [SCRIPT, "task-worker", "--cwd", repo, "--job-id", "task-ended"], { cwd: repo, env: buildEnv(binDir) });
+  assert.equal(fs.existsSync(path.join(binDir, "fake-opencode-state.json")), false, "OpenCode must not be started");
 });

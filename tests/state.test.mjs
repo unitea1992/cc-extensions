@@ -136,3 +136,16 @@ test("readJobFileRaw keeps the real pids of a cancel-marked job for the cancel p
   assert.equal(raw.pid, 11);
   assert.equal(raw.runnerPid, 12);
 });
+
+test("enforcing a cancel marker keeps the pids so cancel can still stop those processes", async () => {
+  const { enforceCancelMarker } = await import("../plugins/opencode/scripts/lib/tracked-jobs.mjs");
+  const { markJobCancelled, readJobFileRaw } = await import("../plugins/opencode/scripts/lib/state.mjs");
+  const workspace = makeTempDir();
+  writeJobFile(workspace, "task-k", { id: "task-k", status: "running", pid: 21, runnerPid: 22 });
+  markJobCancelled(workspace, "task-k");
+  assert.equal(enforceCancelMarker(workspace, "task-k"), true);
+  const raw = readJobFileRaw(resolveJobFile(workspace, "task-k"));
+  assert.equal(raw.status, "cancelled");
+  assert.equal(raw.pid, 21);
+  assert.equal(raw.runnerPid, 22);
+});

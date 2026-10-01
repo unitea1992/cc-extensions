@@ -114,7 +114,11 @@ export function createJobProgressUpdater(workspaceRoot, jobId) {
       return;
     }
     upsertJob(workspaceRoot, patch);
-    enforceCancelMarker(workspaceRoot, jobId);
+    if (enforceCancelMarker(workspaceRoot, jobId)) {
+      // Cancelled while running: stop ourselves. The SIGTERM handler installed by the OpenCode
+      // runner forwards the signal to its process group before exiting.
+      process.kill(process.pid, "SIGTERM");
+    }
   };
 }
 
@@ -153,7 +157,8 @@ function wasCancelled(workspaceRoot, jobId) {
 }
 
 function restoreCancelledRecord(workspaceRoot, jobId, record) {
-  const cancelled = { status: "cancelled", phase: "cancelled", pid: null, runnerPid: null };
+  // Keep pid/runnerPid: cancel clears them only after it confirmed the processes exited.
+  const cancelled = { status: "cancelled", phase: "cancelled" };
   writeJobFile(workspaceRoot, jobId, { ...record, ...cancelled });
   upsertJob(workspaceRoot, { id: jobId, ...cancelled });
 }

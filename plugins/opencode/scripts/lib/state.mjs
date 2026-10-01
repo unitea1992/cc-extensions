@@ -90,13 +90,13 @@ function applyCancelMarker(cwd, job) {
   return markedCancelled(job);
 }
 
+// The pids are kept on purpose: they are only cleared by a cancel that confirmed the processes
+// exited, so a process that slipped past one cancel can still be found and stopped by the next.
 function markedCancelled(job) {
   return {
     ...job,
     status: "cancelled",
     phase: "cancelled",
-    pid: null,
-    runnerPid: null,
     errorMessage: job.errorMessage ?? "Cancelled by user."
   };
 }
@@ -171,10 +171,34 @@ function removeFileIfExists(filePath) {
   }
 }
 
-export function removeJobArtifacts(cwd, job) {
+// `keepCancelMarker` leaves the marker as a tombstone so a worker that is just starting cannot
+// recreate and run a job whose session already ended.
+export function removeJobArtifacts(cwd, job, options = {}) {
   removeFileIfExists(resolveJobFile(cwd, job.id));
   removeFileIfExists(job.logFile);
-  removeFileIfExists(resolveCancelMarkerFile(cwd, job.id));
+  if (!options.keepCancelMarker) {
+    removeFileIfExists(resolveCancelMarkerFile(cwd, job.id));
+  }
+}
+
+const TOMBSTONE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function pruneOrphanCancelMarkers(cwd) {
+  const jobsDir = resolveJobsDir(cwd);
+  for (const name of fs.readdirSync(jobsDir)) {
+    if (!name.endsWith(".cancelled")) {
+      continue;
+    }
+    const marker = path.join(jobsDir, name);
+    try {
+      const orphan = !fs.existsSync(marker.replace(/\.cancelled$/, ".json"));
+      if (orphan && Date.now() - fs.statSync(marker).mtimeMs > TOMBSTONE_MAX_AGE_MS) {
+        fs.unlinkSync(marker);
+      }
+    } catch {
+      // Removed concurrently.
+    }
+  }
 }
 
 // Keep the newest MAX_JOBS jobs. Active jobs are never pruned.
@@ -187,6 +211,7 @@ function pruneJobs(cwd) {
       removeJobArtifacts(cwd, job);
     }
   }
+  pruneOrphanCancelMarkers(cwd);
 }
 
 export function generateJobId(prefix = "job") {
