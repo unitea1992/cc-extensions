@@ -480,13 +480,17 @@ export function renderStoredJobResult(job, storedJob) {
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
-export function renderCancelReport(job) {
-  const lines = [
-    "# OpenCode Cancel",
-    "",
-    `Cancelled ${job.id}.`,
-    ""
-  ];
+export function renderCancelReport(job, options = {}) {
+  const lines = ["# OpenCode Cancel", ""];
+  if (options.processesStopped === false) {
+    lines.push(
+      `Marked ${job.id} as cancelled, but a process did not exit even after SIGKILL.`,
+      `Run \`/opencode:cancel ${job.id}\` again, or stop it manually${job.runnerPid ? ` (OpenCode process group ${job.runnerPid})` : ""}.`,
+      ""
+    );
+  } else {
+    lines.push(`Cancelled ${job.id}.`, "");
+  }
 
   if (job.title) {
     lines.push(`- Title: ${job.title}`);

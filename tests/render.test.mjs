@@ -57,3 +57,13 @@ test("renderStoredJobResult prefers rendered output for structured review jobs",
   assert.match(output, /OpenCode session ID: thr_123/);
   assert.match(output, /Resume in OpenCode: opencode --session thr_123/);
 });
+
+test("cancel report tells the user when a process survived the stop", async () => {
+  const { renderCancelReport } = await import("../plugins/opencode/scripts/lib/render.mjs");
+  const failed = renderCancelReport({ id: "task-1", runnerPid: 4242 }, { processesStopped: false });
+  assert.match(failed, /did not exit even after SIGKILL/);
+  assert.match(failed, /\/opencode:cancel task-1/);
+  assert.match(failed, /4242/);
+  assert.doesNotMatch(failed, /^Cancelled task-1\./m);
+  assert.match(renderCancelReport({ id: "task-1" }, { processesStopped: true }), /^Cancelled task-1\./m);
+});

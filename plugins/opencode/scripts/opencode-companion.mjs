@@ -943,7 +943,7 @@ async function handleCancel(argv) {
     processesStopped: !stillRunning
   };
 
-  outputCommandResult(payload, renderCancelReport(nextJob), options.json);
+  outputCommandResult(payload, renderCancelReport(nextJob, { processesStopped: !stillRunning }), options.json);
 }
 
 async function main() {

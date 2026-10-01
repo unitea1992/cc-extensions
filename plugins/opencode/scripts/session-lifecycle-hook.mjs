@@ -14,7 +14,8 @@ import {
   readJobFileRaw,
   removeJobArtifacts,
   removeLegacySessionJobs,
-  resolveJobFile
+  resolveJobFile,
+  upsertJob
 } from "./lib/state.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
@@ -53,27 +54,55 @@ function cleanupSessionJobs(cwd, sessionId) {
   }
 
   // Mark every active job first so workers that are just starting stop on their own, then stop all
-  // running process groups together. The hook has a hard time limit (hooks.json), so the stop
-  // uses one shared grace period instead of waiting on each job in turn.
-  const pids = [];
+  // process groups together. The hook has a hard time limit (hooks.json), so the stop uses one
+  // shared grace period instead of waiting on each job in turn. Cancelled jobs that still hold pids
+  // (a process survived an earlier cancel) are stopped again too.
+  const targets = [];
   for (const job of removedJobs) {
-    if (job.status !== "queued" && job.status !== "running") {
-      continue;
-    }
-    markJobCancelled(workspaceRoot, job.id);
     const jobFile = resolveJobFile(workspaceRoot, job.id);
     const raw = fs.existsSync(jobFile) ? readJobFileRaw(jobFile) : job;
-    pids.push(raw.pid ?? job.pid ?? Number.NaN, raw.runnerPid ?? job.runnerPid ?? Number.NaN);
+    const active = job.status === "queued" || job.status === "running";
+    const pid = raw.pid ?? job.pid ?? null;
+    const runnerPid = raw.runnerPid ?? job.runnerPid ?? null;
+    if (!active && !pid && !runnerPid) {
+      continue;
+    }
+    if (active) {
+      markJobCancelled(workspaceRoot, job.id);
+    }
+    targets.push({ job, pid, runnerPid });
   }
+
+  const pids = targets.flatMap((target) => [target.pid ?? Number.NaN, target.runnerPid ?? Number.NaN]);
+  let results = pids.map(() => ({ stopped: false }));
   try {
-    stopProcessGroups(pids, { expectCommand: "opencode", graceMs: 1500, killWaitMs: 1500 });
+    results = stopProcessGroups(pids, { expectCommand: "opencode", graceMs: 1500, killWaitMs: 1500 });
   } catch {
-    // Ignore teardown failures during session shutdown.
+    // Treat as not stopped; the records below are kept so the processes can still be found.
   }
 
   // Jobs live in their own files, so removing this session's files cannot touch other sessions.
+  // A job with a process that did not exit keeps its record and pids for a later cancel.
+  const survivors = new Set();
+  targets.forEach((target, index) => {
+    const workerStopped = results[index * 2].stopped;
+    const runnerStopped = results[index * 2 + 1].stopped;
+    if (!workerStopped || !runnerStopped) {
+      survivors.add(target.job.id);
+      upsertJob(workspaceRoot, {
+        id: target.job.id,
+        status: "cancelled",
+        phase: "cancelled",
+        pid: workerStopped ? null : target.pid,
+        runnerPid: runnerStopped ? null : target.runnerPid,
+        errorMessage: "The Claude session ended, but a process did not exit. Run /opencode:cancel with this job id."
+      });
+    }
+  });
   for (const job of removedJobs) {
-    removeJobArtifacts(workspaceRoot, job, { keepCancelMarker: true });
+    if (!survivors.has(job.id)) {
+      removeJobArtifacts(workspaceRoot, job, { keepCancelMarker: true });
+    }
   }
   removeLegacySessionJobs(workspaceRoot, sessionId);
 }

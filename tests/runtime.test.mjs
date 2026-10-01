@@ -2159,3 +2159,32 @@ test("cancel keeps a result the worker saved after cancel read the job", () => {
   assert.equal(stored.rendered, "kept\n");
   assert.equal(stored.result.rawOutput, "kept");
 });
+
+test("session end also stops a process that survived an earlier cancel", { skip: process.platform === "win32" }, async () => {
+  const repo = makeTempDir();
+  initGitRepo(repo);
+  const jobsDir = path.join(resolveStateDir(repo), "jobs");
+  fs.mkdirSync(jobsDir, { recursive: true });
+  const survivor = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "opencode-test-runner"], { detached: true, stdio: "ignore" });
+  survivor.unref();
+  fs.writeFileSync(
+    path.join(jobsDir, "task-left.json"),
+    JSON.stringify({ id: "task-left", status: "cancelled", sessionId: "sess-left", runnerPid: survivor.pid, pid: null }),
+    "utf8"
+  );
+
+  const hook = run("node", [SESSION_HOOK, "SessionEnd"], {
+    cwd: repo,
+    input: JSON.stringify({ hook_event_name: "SessionEnd", session_id: "sess-left", cwd: repo })
+  });
+  assert.equal(hook.status, 0, hook.stderr);
+  await waitFor(() => {
+    try {
+      process.kill(survivor.pid, 0);
+      return false;
+    } catch (error) {
+      return error?.code === "ESRCH";
+    }
+  });
+  assert.equal(fs.existsSync(path.join(jobsDir, "task-left.json")), false);
+});
