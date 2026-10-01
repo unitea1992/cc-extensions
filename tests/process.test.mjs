@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { stopProcessGroup, terminateProcessTree } from "../plugins/opencode/scripts/lib/process.mjs";
+import { stopProcessGroup, stopProcessGroups, terminateProcessTree } from "../plugins/opencode/scripts/lib/process.mjs";
 
 test("terminateProcessTree uses taskkill on Windows", () => {
   let captured = null;
@@ -136,4 +136,20 @@ test("stopProcessGroup still stops surviving group members after the leader exit
   assert.equal(outcome.stopped, true);
   assert.equal(outcome.forced, true);
   assert.throws(() => process.kill(childPid, 0), { code: "ESRCH" });
+});
+
+test("stopProcessGroups stops many SIGTERM-ignoring groups within one grace period", { skip: process.platform !== "linux" }, async () => {
+  const { spawn } = await import("node:child_process");
+  const groups = Array.from({ length: 4 }, () =>
+    spawn("sh", ["-c", "trap '' TERM; while :; do sleep 0.1; done", "opencode-test-group"], { detached: true, stdio: "ignore" })
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const started = Date.now();
+  const results = stopProcessGroups(
+    groups.map((child) => child.pid),
+    { expectCommand: "opencode", graceMs: 500, killWaitMs: 2000 }
+  );
+  const elapsed = Date.now() - started;
+  assert.ok(results.every((result) => result.stopped && result.forced), JSON.stringify(results));
+  assert.ok(elapsed < 2500, `took ${elapsed}ms; groups must share the grace period`);
 });

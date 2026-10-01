@@ -6,7 +6,7 @@ import process from "node:process";
 // Modified from openai/codex-plugin-cc (Apache-2.0): there is no shared broker to tear down,
 // so SessionEnd only stops this session's running OpenCode jobs.
 
-import { stopProcessGroup } from "./lib/process.mjs";
+import { stopProcessGroups } from "./lib/process.mjs";
 import {
   COMPANION_DATA_ENV,
   loadState,
@@ -52,21 +52,23 @@ function cleanupSessionJobs(cwd, sessionId) {
     return;
   }
 
+  // Mark every active job first so workers that are just starting stop on their own, then stop all
+  // running process groups together. The hook has a hard time limit (hooks.json), so the stop
+  // uses one shared grace period instead of waiting on each job in turn.
+  const pids = [];
   for (const job of removedJobs) {
-    const stillRunning = job.status === "queued" || job.status === "running";
-    if (!stillRunning) {
+    if (job.status !== "queued" && job.status !== "running") {
       continue;
     }
-    // Mark first so a worker that is just starting stops on its own, then stop what is running.
     markJobCancelled(workspaceRoot, job.id);
-    const raw = fs.existsSync(resolveJobFile(workspaceRoot, job.id)) ? readJobFileRaw(resolveJobFile(workspaceRoot, job.id)) : job;
-    for (const pid of [raw.pid ?? job.pid, raw.runnerPid ?? job.runnerPid]) {
-      try {
-        stopProcessGroup(pid ?? Number.NaN, { expectCommand: "opencode" });
-      } catch {
-        // Ignore teardown failures during session shutdown.
-      }
-    }
+    const jobFile = resolveJobFile(workspaceRoot, job.id);
+    const raw = fs.existsSync(jobFile) ? readJobFileRaw(jobFile) : job;
+    pids.push(raw.pid ?? job.pid ?? Number.NaN, raw.runnerPid ?? job.runnerPid ?? Number.NaN);
+  }
+  try {
+    stopProcessGroups(pids, { expectCommand: "opencode", graceMs: 1500, killWaitMs: 1500 });
+  } catch {
+    // Ignore teardown failures during session shutdown.
   }
 
   // Jobs live in their own files, so removing this session's files cannot touch other sessions.

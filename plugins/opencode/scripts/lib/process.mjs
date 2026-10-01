@@ -198,55 +198,75 @@ function readCommandLine(pid) {
 }
 
 export function stopProcessGroup(pid, options = {}) {
-  if (!Number.isFinite(pid)) {
-    return { attempted: false, stopped: true, forced: false };
-  }
+  return stopProcessGroups([pid], options)[0];
+}
+
+// Stops several process groups with one shared grace period: SIGTERM all of them, wait once,
+// then SIGKILL every survivor. The total time stays bounded by graceMs + killWaitMs no matter how
+// many groups there are, which matters inside hooks with a hard time limit.
+export function stopProcessGroups(pids, options = {}) {
   const platform = options.platform ?? process.platform;
-  // A stored pid can outlive its process and be reused by the OS. When the caller says what the
-  // process should be, skip anything that is no longer it.
-  if (options.expectCommand && platform === "linux" && !options.killImpl) {
-    const leader = readCommandLine(pid);
-    if (leader !== null && !leader.includes(options.expectCommand)) {
-      // The pid is alive but now runs something else: it was reused.
-      return { attempted: false, stopped: true, forced: false, skipped: "pid no longer belongs to this job" };
-    }
-    // `null` means /proc could not be scanned; then fall through and signal rather than assume.
-    if (leader === null && linuxGroupAlive(pid) === false) {
-      return { attempted: false, stopped: true, forced: false };
-    }
-    // Otherwise the leader is ours, or it exited while children remain in its group. Linux does
-    // not hand out a pid that is still in use as a process group id, so signalling the group is
-    // safe in both cases.
-  }
   const killImpl = options.killImpl ?? process.kill.bind(process);
   // Injected kill functions (tests) describe liveness themselves; do not consult /proc then.
   const useProc = !options.killImpl;
-  const first = terminateProcessTree(pid, options);
-  if (!first.delivered || platform === "win32") {
-    // Already gone, or taskkill /T /F which is forceful by itself.
-    return { attempted: true, stopped: true, forced: false };
-  }
-  const waitUntilGone = (timeoutMs) => {
+  const results = pids.map(() => ({ attempted: false, stopped: true, forced: false }));
+  const pending = [];
+
+  pids.forEach((pid, index) => {
+    if (!Number.isFinite(pid)) {
+      return;
+    }
+    // A stored pid can outlive its process and be reused by the OS. When the caller says what the
+    // process should be, skip anything that is no longer it.
+    if (options.expectCommand && platform === "linux" && useProc) {
+      const leader = readCommandLine(pid);
+      if (leader !== null && !leader.includes(options.expectCommand)) {
+        results[index] = { attempted: false, stopped: true, forced: false, skipped: "pid no longer belongs to this job" };
+        return;
+      }
+      // `null` means /proc could not be scanned; then fall through and signal rather than assume.
+      if (leader === null && linuxGroupAlive(pid) === false) {
+        return;
+      }
+      // Otherwise the leader is ours, or it exited while children remain in its group. Linux does
+      // not hand out a pid that is still in use as a process group id, so signalling the group is
+      // safe in both cases.
+    }
+    const first = terminateProcessTree(pid, options);
+    results[index] = { attempted: true, stopped: true, forced: false };
+    // Not delivered means already gone; on Windows taskkill /T /F is forceful by itself.
+    if (first.delivered && platform !== "win32") {
+      pending.push(index);
+    }
+  });
+
+  const waitUntilGone = (indexes, timeoutMs) => {
     const deadline = Date.now() + timeoutMs;
-    while (isAlive(pid, killImpl, platform, useProc)) {
-      if (Date.now() >= deadline) {
-        return false;
+    let alive = indexes;
+    for (;;) {
+      alive = alive.filter((index) => isAlive(pids[index], killImpl, platform, useProc));
+      if (alive.length === 0 || Date.now() >= deadline) {
+        return alive;
       }
       sleepSync(50);
     }
-    return true;
   };
-  if (waitUntilGone(options.graceMs ?? 3000)) {
-    return { attempted: true, stopped: true, forced: false };
-  }
-  for (const target of [-pid, pid]) {
-    try {
-      killImpl(target, "SIGKILL");
-    } catch {
-      // Gone in the meantime.
+
+  const survivors = waitUntilGone(pending, options.graceMs ?? 3000);
+  for (const index of survivors) {
+    results[index].forced = true;
+    for (const target of [-pids[index], pids[index]]) {
+      try {
+        killImpl(target, "SIGKILL");
+      } catch {
+        // Gone in the meantime.
+      }
     }
   }
-  return { attempted: true, stopped: waitUntilGone(options.killWaitMs ?? 2000), forced: true };
+  for (const index of waitUntilGone(survivors, options.killWaitMs ?? 2000)) {
+    results[index].stopped = false;
+  }
+  return results;
 }
 
 export function formatCommandFailure(result) {
