@@ -1,0 +1,9 @@
+{
+  "name": "opencode",
+  "version": "0.1.0",
+  "description": "Use OpenCode from Claude Code to review code or delegate tasks.",
+  "author": {
+    "name": "unitea1992"
+  },
+  "license": "Apache-2.0"
+}

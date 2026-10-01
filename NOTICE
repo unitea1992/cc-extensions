@@ -1,0 +1,27 @@
+cc-extensions / opencode-plugin-cc
+Copyright 2026 unitea1992
+
+This product includes software derived from openai/codex-plugin-cc
+(https://github.com/openai/codex-plugin-cc), Copyright 2026 OpenAI,
+licensed under the Apache License, Version 2.0.
+
+Modifications: the Codex app-server and broker runtime were replaced with
+one-shot `opencode run --standalone --format json` executions; reviews now
+collect the diff and request schema-shaped JSON through prompts; read-only
+runs inject a dedicated OpenCode agent per run; Codex-specific features
+(session transfer, GPT prompting skill, model aliases) were removed; command,
+skill, agent, and test names were changed from Codex to OpenCode. Changed
+JavaScript files carry a "Modified from openai/codex-plugin-cc" header; the
+command, agent, skill, and prompt Markdown files were also adapted.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
