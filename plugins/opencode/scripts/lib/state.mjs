@@ -81,6 +81,15 @@ export function ensureStateDir(cwd) {
   fs.mkdirSync(resolveJobsDir(cwd), { recursive: true });
 }
 
+// A cancel marker always wins over whatever status a job record carries, so readers never show a
+// cancelled job as queued or running even if some writer persisted an older copy.
+function applyCancelMarker(cwd, job) {
+  if (!job?.id || job.status === "cancelled" || !fs.existsSync(path.join(resolveJobsDir(cwd), `${job.id}.cancelled`))) {
+    return job;
+  }
+  return { ...job, status: "cancelled", phase: "cancelled", pid: null, runnerPid: null };
+}
+
 export function loadState(cwd) {
   const stateFile = resolveStateFile(cwd);
   if (!fs.existsSync(stateFile)) {
@@ -96,10 +105,53 @@ export function loadState(cwd) {
         ...defaultState().config,
         ...(parsed.config ?? {})
       },
-      jobs: Array.isArray(parsed.jobs) ? parsed.jobs : []
+      jobs: Array.isArray(parsed.jobs) ? parsed.jobs.map((job) => applyCancelMarker(cwd, job)) : []
     };
   } catch {
     return defaultState();
+  }
+}
+
+const LOCK_DIR_NAME = "state.lock";
+const LOCK_TIMEOUT_MS = 30000;
+const LOCK_STALE_MS = 10000;
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Workers, cancel, setup, and hooks all rewrite the shared index; serialize every
+// read-modify-write so one process can never write back a stale copy over another's update.
+export function withStateLock(cwd, fn) {
+  ensureStateDir(cwd);
+  const lockDir = path.join(resolveStateDir(cwd), LOCK_DIR_NAME);
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  for (;;) {
+    try {
+      fs.mkdirSync(lockDir);
+      break;
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        throw error;
+      }
+      try {
+        if (Date.now() - fs.statSync(lockDir).mtimeMs > LOCK_STALE_MS) {
+          fs.rmSync(lockDir, { recursive: true, force: true });
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`Timed out waiting for the companion state lock at ${lockDir}.`);
+      }
+      sleepSync(15);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(lockDir, { recursive: true, force: true });
   }
 }
 
@@ -143,9 +195,11 @@ export function saveState(cwd, state) {
 }
 
 export function updateState(cwd, mutate) {
-  const state = loadState(cwd);
-  mutate(state);
-  return saveState(cwd, state);
+  return withStateLock(cwd, () => {
+    const state = loadState(cwd);
+    mutate(state);
+    return saveState(cwd, state);
+  });
 }
 
 export function generateJobId(prefix = "job") {
@@ -198,7 +252,12 @@ export function writeJobFile(cwd, jobId, payload) {
 }
 
 export function readJobFile(jobFile) {
-  return JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  const job = JSON.parse(fs.readFileSync(jobFile, "utf8"));
+  const marker = jobFile.replace(/\.json$/, ".cancelled");
+  if (job?.status !== "cancelled" && marker !== jobFile && fs.existsSync(marker)) {
+    return { ...job, status: "cancelled", phase: "cancelled", pid: null, runnerPid: null };
+  }
+  return job;
 }
 
 function removeJobFile(jobFile) {

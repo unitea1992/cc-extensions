@@ -7,7 +7,7 @@ import process from "node:process";
 // so SessionEnd only stops this session's running OpenCode jobs.
 
 import { terminateProcessTree } from "./lib/process.mjs";
-import { COMPANION_DATA_ENV, loadState, resolveStateFile, saveState } from "./lib/state.mjs";
+import { COMPANION_DATA_ENV, loadState, resolveStateFile, updateState } from "./lib/state.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 export const SESSION_ID_ENV = "OPENCODE_COMPANION_SESSION_ID";
@@ -63,9 +63,9 @@ function cleanupSessionJobs(cwd, sessionId) {
     }
   }
 
-  saveState(workspaceRoot, {
-    ...state,
-    jobs: state.jobs.filter((job) => job.sessionId !== sessionId)
+  // Re-read under the lock so jobs added or updated meanwhile by other sessions are kept.
+  updateState(workspaceRoot, (latest) => {
+    latest.jobs = latest.jobs.filter((job) => job.sessionId !== sessionId);
   });
 }
 

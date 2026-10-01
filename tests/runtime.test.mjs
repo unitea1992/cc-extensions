@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { buildEnv, FAKE_MODELS, installFakeOpencode, readFakeState } from "./fake-opencode-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
-import { resolveStateDir } from "../plugins/opencode/scripts/lib/state.mjs";
+import { loadState, readJobFile, resolveStateDir } from "../plugins/opencode/scripts/lib/state.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "opencode");
@@ -2082,8 +2082,8 @@ test("a worker racing a cancel stops when the cancel marker exists even though t
 
   run("node", [SCRIPT, "task-worker", "--cwd", repo, "--job-id", "task-race"], { cwd: repo, env: buildEnv(binDir) });
   assert.equal(fs.existsSync(path.join(binDir, "fake-opencode-state.json")), false, "OpenCode must not be started");
-  const stored = JSON.parse(fs.readFileSync(path.join(jobsDir, "task-race.json"), "utf8"));
-  assert.equal(stored.status, "cancelled");
-  const index = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
-  assert.equal(index.jobs.find((entry) => entry.id === "task-race").status, "cancelled");
+  assert.equal(readJobFile(path.join(jobsDir, "task-race.json")).status, "cancelled");
+  assert.equal(loadState(repo).jobs.find((entry) => entry.id === "task-race").status, "cancelled");
+  const status = JSON.parse(run("node", [SCRIPT, "status", "task-race", "--json"], { cwd: repo, env: buildEnv(binDir) }).stdout);
+  assert.equal(status.job.status, "cancelled");
 });

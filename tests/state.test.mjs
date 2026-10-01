@@ -125,3 +125,36 @@ test("a stale write after cancel is reverted to cancelled when the cancel marker
   assert.equal(readJobFile(resolveJobFile(workspace, "task-x")).status, "cancelled");
   assert.equal(loadState(workspace).jobs.find((job) => job.id === "task-x").status, "cancelled");
 });
+
+test("concurrent index updates from separate processes are never lost", async () => {
+  const { spawn } = await import("node:child_process");
+  const workspace = makeTempDir();
+  const stateModule = new URL("../plugins/opencode/scripts/lib/state.mjs", import.meta.url).href;
+  const script = `
+    const { upsertJob } = await import(${JSON.stringify(stateModule)});
+    const [workspace, worker] = process.argv.slice(1);
+    for (let index = 0; index < 8; index += 1) {
+      upsertJob(workspace, { id: "job-" + worker + "-" + index, status: "running" });
+    }
+  `;
+  await Promise.all(
+    Array.from({ length: 5 }, (_, worker) =>
+      new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ["--input-type=module", "-e", script, workspace, String(worker)], { stdio: "inherit" });
+        child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`worker exited ${code}`))));
+      })
+    )
+  );
+  const { loadState } = await import("../plugins/opencode/scripts/lib/state.mjs");
+  assert.equal(loadState(workspace).jobs.length, 40);
+});
+
+test("readers show a marked job as cancelled even if an older index copy says running", async () => {
+  const { loadState, markJobCancelled, upsertJob, writeJobFile, readJobFile } = await import("../plugins/opencode/scripts/lib/state.mjs");
+  const workspace = makeTempDir();
+  upsertJob(workspace, { id: "task-a", status: "running", pid: 7 });
+  writeJobFile(workspace, "task-a", { id: "task-a", status: "running", pid: 7 });
+  markJobCancelled(workspace, "task-a");
+  assert.equal(loadState(workspace).jobs[0].status, "cancelled");
+  assert.equal(readJobFile(resolveJobFile(workspace, "task-a")).status, "cancelled");
+});
