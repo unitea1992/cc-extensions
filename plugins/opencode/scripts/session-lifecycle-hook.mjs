@@ -62,7 +62,7 @@ function cleanupSessionJobs(cwd, sessionId) {
     const raw = fs.existsSync(resolveJobFile(workspaceRoot, job.id)) ? readJobFileRaw(resolveJobFile(workspaceRoot, job.id)) : job;
     for (const pid of [raw.pid ?? job.pid, raw.runnerPid ?? job.runnerPid]) {
       try {
-        stopProcessGroup(pid ?? Number.NaN);
+        stopProcessGroup(pid ?? Number.NaN, { expectCommand: "opencode" });
       } catch {
         // Ignore teardown failures during session shutdown.
       }

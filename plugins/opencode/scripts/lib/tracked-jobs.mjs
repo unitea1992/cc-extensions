@@ -192,7 +192,10 @@ export async function runTrackedJob(job, runner, options = {}) {
   // Cancel marks the job before it looks up the pid to kill. Checking again after publishing our
   // pid closes the window: either cancel saw this pid and will stop us, or we see its marker here.
   if (isJobCancelMarked(job.workspaceRoot, job.id)) {
-    restoreCancelledRecord(job.workspaceRoot, job.id, runningRecord);
+    // Nothing was started and this process exits right away, so its pid must not stay on record
+    // where a later cancel could signal an unrelated process that reused it.
+    restoreCancelledRecord(job.workspaceRoot, job.id, { ...runningRecord, pid: null, runnerPid: null });
+    upsertJob(job.workspaceRoot, { id: job.id, pid: null, runnerPid: null });
     throw new Error(`Job ${job.id} was cancelled before it started.`);
   }
 

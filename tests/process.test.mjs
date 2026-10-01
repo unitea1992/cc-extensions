@@ -107,3 +107,15 @@ test("stopProcessGroup reports a process that survives SIGKILL", () => {
   const outcome = stopProcessGroup(998, { platform: "linux", graceMs: 30, killWaitMs: 30, killImpl() {} });
   assert.equal(outcome.stopped, false);
 });
+
+test("stopProcessGroup leaves a reused pid alone when its command line does not match", { skip: process.platform !== "linux" }, async () => {
+  const { spawn } = await import("node:child_process");
+  const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
+  try {
+    const outcome = stopProcessGroup(unrelated.pid, { expectCommand: "opencode" });
+    assert.equal(outcome.attempted, false);
+    assert.doesNotThrow(() => process.kill(unrelated.pid, 0));
+  } finally {
+    process.kill(-unrelated.pid, "SIGKILL");
+  }
+});

@@ -11,7 +11,7 @@ import path from "node:path";
 import process from "node:process";
 
 import { readJsonFile } from "./fs.mjs";
-import { binaryAvailable, runCommand } from "./process.mjs";
+import { binaryAvailable, runCommand, stopProcessGroup } from "./process.mjs";
 
 export const OPENCODE_BIN_ENV = "OPENCODE_COMPANION_BIN";
 export const READ_ONLY_AGENT = "cc-companion-readonly";
@@ -494,18 +494,23 @@ export async function runOpencodeTurn(cwd, options = {}) {
   // Forward termination explicitly so an interrupted companion never leaves OpenCode running.
   // Signal the whole group even if the runner itself already exited: tools it started
   // (shell commands, the private server) may still be alive in that group.
+  // After the forwarded signal, wait for the group to exit and escalate to SIGKILL: OpenCode or a
+  // command it started may handle or ignore SIGTERM, and nothing else will stop it once we exit.
   const stopChild = (signal = "SIGTERM") => {
     if (!child.pid) {
       return;
     }
-    try {
-      if (process.platform === "win32") {
-        runCommand("taskkill", ["/PID", String(child.pid), "/T", "/F"]);
-      } else {
-        process.kill(-child.pid, typeof signal === "string" ? signal : "SIGTERM");
+    if (process.platform !== "win32" && typeof signal === "string" && signal !== "SIGTERM") {
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        // Already gone.
       }
+    }
+    try {
+      stopProcessGroup(child.pid);
     } catch {
-      // Already gone.
+      // Best effort while exiting.
     }
   };
   const onSignal = (signal) => {

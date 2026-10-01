@@ -187,11 +187,25 @@ function isAlive(pid, killImpl, platform, useProc) {
 // SIGTERM, wait for the process (group) to go away, and escalate to SIGKILL if it does not.
 // A delivered SIGTERM alone does not prove anything stopped: OpenCode or a command it started can
 // handle or ignore the signal.
+function commandLineMatches(pid, expected) {
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(expected);
+  } catch {
+    // Gone, or /proc unavailable: there is nothing alive under this pid to protect.
+    return false;
+  }
+}
+
 export function stopProcessGroup(pid, options = {}) {
   if (!Number.isFinite(pid)) {
     return { attempted: false, stopped: true, forced: false };
   }
   const platform = options.platform ?? process.platform;
+  // A stored pid can outlive its process and be reused by the OS. When the caller says what the
+  // process should be, skip anything that is no longer it.
+  if (options.expectCommand && platform === "linux" && !options.killImpl && !commandLineMatches(pid, options.expectCommand)) {
+    return { attempted: false, stopped: true, forced: false, skipped: "pid no longer belongs to this job" };
+  }
   const killImpl = options.killImpl ?? process.kill.bind(process);
   // Injected kill functions (tests) describe liveness themselves; do not consult /proc then.
   const useProc = !options.killImpl;

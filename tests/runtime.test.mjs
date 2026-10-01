@@ -1193,7 +1193,8 @@ test("cancel stops an active background job and marks it cancelled", async (t) =
   const jobsDir = path.join(stateDir, "jobs");
   fs.mkdirSync(jobsDir, { recursive: true });
 
-  const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  // The trailing argument stands in for the companion or OpenCode command line that cancel verifies.
+  const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "opencode-test-worker"], {
     cwd: workspace,
     detached: true,
     stdio: "ignore"
@@ -1408,7 +1409,8 @@ test("session end fully cleans up jobs for the ending session", async (t) => {
   fs.writeFileSync(completedJobFile, JSON.stringify({ id: "review-completed" }, null, 2), "utf8");
   fs.writeFileSync(otherJobFile, JSON.stringify({ id: "review-other" }, null, 2), "utf8");
 
-  const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  // The trailing argument stands in for the companion or OpenCode command line that cancel verifies.
+  const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "opencode-test-worker"], {
     cwd: repo,
     detached: true,
     stdio: "ignore"
@@ -2137,4 +2139,23 @@ test("a queued worker whose session already ended never runs", () => {
   fs.writeFileSync(path.join(jobsDir, "task-ended.json"), JSON.stringify(job), "utf8");
   run("node", [SCRIPT, "task-worker", "--cwd", repo, "--job-id", "task-ended"], { cwd: repo, env: buildEnv(binDir) });
   assert.equal(fs.existsSync(path.join(binDir, "fake-opencode-state.json")), false, "OpenCode must not be started");
+});
+
+test("cancel keeps a result the worker saved after cancel read the job", () => {
+  const workspace = makeTempDir();
+  const stateDir = resolveStateDir(workspace);
+  const jobsDir = path.join(stateDir, "jobs");
+  fs.mkdirSync(jobsDir, { recursive: true });
+  // The job completed and saved its result; cancel arrives with a stale view of it.
+  fs.writeFileSync(
+    path.join(jobsDir, "task-done.json"),
+    JSON.stringify({ id: "task-done", status: "running", title: "OpenCode Task", jobClass: "task", result: { rawOutput: "kept" }, rendered: "kept\n" }),
+    "utf8"
+  );
+  const cancel = run("node", [SCRIPT, "cancel", "task-done", "--json"], { cwd: workspace });
+  assert.equal(cancel.status, 0, cancel.stderr);
+  const stored = JSON.parse(fs.readFileSync(path.join(jobsDir, "task-done.json"), "utf8"));
+  assert.equal(stored.status, "cancelled");
+  assert.equal(stored.rendered, "kept\n");
+  assert.equal(stored.result.rawOutput, "kept");
 });

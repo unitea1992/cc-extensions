@@ -895,8 +895,8 @@ async function handleCancel(argv) {
 
   // Stop the worker first so it cannot record the interrupted run as failed, then make sure the
   // OpenCode process group (which owns the private server) is gone as well, escalating to SIGKILL.
-  const workerStop = stopProcessGroup(job.pid ?? Number.NaN);
-  const runnerStop = stopProcessGroup(runnerPid ?? Number.NaN);
+  const workerStop = stopProcessGroup(job.pid ?? Number.NaN, { expectCommand: "opencode" });
+  const runnerStop = stopProcessGroup(runnerPid ?? Number.NaN, { expectCommand: "opencode" });
   if (runnerStop.attempted) {
     appendLogLine(
       job.logFile,
@@ -922,17 +922,24 @@ async function handleCancel(argv) {
       : "Cancelled by user."
   };
 
-  writeJobFile(workspaceRoot, job.id, {
-    ...existing,
-    ...nextJob,
-    cancelledAt: completedAt
+  // Patch only the cancel fields: the worker may have saved its result in the meantime, and a
+  // whole-record write from the copy read above would erase it.
+  upsertJob(workspaceRoot, {
+    id: job.id,
+    status: "cancelled",
+    phase: "cancelled",
+    pid: nextJob.pid,
+    runnerPid: nextJob.runnerPid,
+    completedAt,
+    cancelledAt: completedAt,
+    errorMessage: nextJob.errorMessage
   });
 
   const payload = {
     jobId: job.id,
     status: "cancelled",
     title: job.title,
-    runnerStopped: runnerStop.attempted ? runnerStop.stopped : false,
+    runnerStopped: runnerPid ? runnerStop.stopped : false,
     processesStopped: !stillRunning
   };
 
