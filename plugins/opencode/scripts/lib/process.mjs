@@ -187,12 +187,13 @@ function isAlive(pid, killImpl, platform, useProc) {
 // SIGTERM, wait for the process (group) to go away, and escalate to SIGKILL if it does not.
 // A delivered SIGTERM alone does not prove anything stopped: OpenCode or a command it started can
 // handle or ignore the signal.
-function commandLineMatches(pid, expected) {
+// Returns null when the process does not exist (or is a zombie with an empty command line).
+function readCommandLine(pid) {
   try {
-    return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(expected);
+    const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+    return cmdline ? cmdline : null;
   } catch {
-    // Gone, or /proc unavailable: there is nothing alive under this pid to protect.
-    return false;
+    return null;
   }
 }
 
@@ -203,8 +204,18 @@ export function stopProcessGroup(pid, options = {}) {
   const platform = options.platform ?? process.platform;
   // A stored pid can outlive its process and be reused by the OS. When the caller says what the
   // process should be, skip anything that is no longer it.
-  if (options.expectCommand && platform === "linux" && !options.killImpl && !commandLineMatches(pid, options.expectCommand)) {
-    return { attempted: false, stopped: true, forced: false, skipped: "pid no longer belongs to this job" };
+  if (options.expectCommand && platform === "linux" && !options.killImpl) {
+    const leader = readCommandLine(pid);
+    if (leader !== null && !leader.includes(options.expectCommand)) {
+      // The pid is alive but now runs something else: it was reused.
+      return { attempted: false, stopped: true, forced: false, skipped: "pid no longer belongs to this job" };
+    }
+    if (leader === null && !linuxGroupAlive(pid)) {
+      return { attempted: false, stopped: true, forced: false };
+    }
+    // Otherwise the leader is ours, or it exited while children remain in its group. Linux does
+    // not hand out a pid that is still in use as a process group id, so signalling the group is
+    // safe in both cases.
   }
   const killImpl = options.killImpl ?? process.kill.bind(process);
   // Injected kill functions (tests) describe liveness themselves; do not consult /proc then.

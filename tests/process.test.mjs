@@ -119,3 +119,21 @@ test("stopProcessGroup leaves a reused pid alone when its command line does not 
     process.kill(-unrelated.pid, "SIGKILL");
   }
 });
+
+test("stopProcessGroup still stops surviving group members after the leader exited", { skip: process.platform !== "linux" }, async () => {
+  const { spawn } = await import("node:child_process");
+  // The leader starts a child that ignores SIGTERM, then exits; the child stays in the group.
+  const leader = spawn(
+    "sh",
+    ["-c", "sh -c 'trap \"\" TERM; while :; do sleep 0.1; done' & echo $!; exit 0", "opencode-test-leader"],
+    { detached: true, stdio: ["ignore", "pipe", "ignore"] }
+  );
+  const childPid = Number(await new Promise((resolve) => leader.stdout.once("data", (chunk) => resolve(String(chunk).trim()))));
+  await new Promise((resolve) => leader.on("exit", resolve));
+  assert.doesNotThrow(() => process.kill(childPid, 0));
+
+  const outcome = stopProcessGroup(leader.pid, { expectCommand: "opencode", graceMs: 200, killWaitMs: 2000 });
+  assert.equal(outcome.stopped, true);
+  assert.equal(outcome.forced, true);
+  assert.throws(() => process.kill(childPid, 0), { code: "ESRCH" });
+});
