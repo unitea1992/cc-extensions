@@ -108,3 +108,20 @@ test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", 
       .sort()
   );
 });
+
+test("a stale write after cancel is reverted to cancelled when the cancel marker exists", async () => {
+  const { enforceCancelMarker } = await import("../plugins/opencode/scripts/lib/tracked-jobs.mjs");
+  const { markJobCancelled, upsertJob, writeJobFile, readJobFile, loadState } = await import("../plugins/opencode/scripts/lib/state.mjs");
+  const workspace = makeTempDir();
+  writeJobFile(workspace, "task-x", { id: "task-x", status: "queued", pid: 42 });
+  upsertJob(workspace, { id: "task-x", status: "queued", pid: 42 });
+
+  assert.equal(enforceCancelMarker(workspace, "task-x"), false);
+  markJobCancelled(workspace, "task-x");
+  // A launcher that read the job before cancel finished writes its stale queued copy back.
+  writeJobFile(workspace, "task-x", { id: "task-x", status: "queued", pid: 42 });
+  assert.equal(enforceCancelMarker(workspace, "task-x"), true);
+
+  assert.equal(readJobFile(resolveJobFile(workspace, "task-x")).status, "cancelled");
+  assert.equal(loadState(workspace).jobs.find((job) => job.id === "task-x").status, "cancelled");
+});

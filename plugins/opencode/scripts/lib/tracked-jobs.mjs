@@ -122,6 +122,7 @@ export function createJobProgressUpdater(workspaceRoot, jobId) {
       ...storedJob,
       ...patch
     });
+    enforceCancelMarker(workspaceRoot, jobId);
   };
 }
 
@@ -165,8 +166,20 @@ function restoreCancelledRecord(workspaceRoot, jobId, record) {
   upsertJob(workspaceRoot, { id: jobId, ...cancelled });
 }
 
+// Call right after any write that may carry a stale non-cancelled status. Cancel creates its
+// marker before saving `cancelled`, so either cancel's save lands after our write, or the marker
+// is already visible here and we put `cancelled` back ourselves.
+export function enforceCancelMarker(workspaceRoot, jobId) {
+  if (!isJobCancelMarked(workspaceRoot, jobId)) {
+    return false;
+  }
+  restoreCancelledRecord(workspaceRoot, jobId, readStoredJobOrNull(workspaceRoot, jobId) ?? { id: jobId });
+  return true;
+}
+
 export async function runTrackedJob(job, runner, options = {}) {
   if (wasCancelled(job.workspaceRoot, job.id)) {
+    enforceCancelMarker(job.workspaceRoot, job.id);
     throw new Error(`Job ${job.id} was cancelled before it started.`);
   }
   const runningRecord = {
@@ -216,6 +229,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       runnerPid: null,
       completedAt
     });
+    enforceCancelMarker(job.workspaceRoot, job.id);
     appendLogBlock(options.logFile ?? job.logFile ?? null, "Final output", execution.rendered);
     return execution;
   } catch (error) {
@@ -244,6 +258,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       errorMessage,
       completedAt
     });
+    enforceCancelMarker(job.workspaceRoot, job.id);
     throw error;
   }
 }

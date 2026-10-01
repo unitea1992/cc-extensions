@@ -49,6 +49,7 @@ import {
   createJobProgressUpdater,
   createJobRecord,
   createProgressReporter,
+  enforceCancelMarker,
   nowIso,
   runTrackedJob,
   SESSION_ID_ENV
@@ -619,6 +620,7 @@ function enqueueBackgroundTask(cwd, job, request) {
     if (stored?.status === "queued") {
       writeJobFile(job.workspaceRoot, job.id, { ...stored, pid: child.pid });
       upsertJob(job.workspaceRoot, { id: job.id, pid: child.pid });
+      enforceCancelMarker(job.workspaceRoot, job.id);
     }
   }
 

@@ -2083,6 +2083,7 @@ test("a worker racing a cancel stops when the cancel marker exists even though t
   run("node", [SCRIPT, "task-worker", "--cwd", repo, "--job-id", "task-race"], { cwd: repo, env: buildEnv(binDir) });
   assert.equal(fs.existsSync(path.join(binDir, "fake-opencode-state.json")), false, "OpenCode must not be started");
   const stored = JSON.parse(fs.readFileSync(path.join(jobsDir, "task-race.json"), "utf8"));
-  assert.notEqual(stored.status, "running");
-  assert.notEqual(stored.status, "completed");
+  assert.equal(stored.status, "cancelled");
+  const index = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(index.jobs.find((entry) => entry.id === "task-race").status, "cancelled");
 });
