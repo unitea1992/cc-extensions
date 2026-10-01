@@ -210,7 +210,8 @@ export function stopProcessGroup(pid, options = {}) {
       // The pid is alive but now runs something else: it was reused.
       return { attempted: false, stopped: true, forced: false, skipped: "pid no longer belongs to this job" };
     }
-    if (leader === null && !linuxGroupAlive(pid)) {
+    // `null` means /proc could not be scanned; then fall through and signal rather than assume.
+    if (leader === null && linuxGroupAlive(pid) === false) {
       return { attempted: false, stopped: true, forced: false };
     }
     // Otherwise the leader is ours, or it exited while children remain in its group. Linux does
