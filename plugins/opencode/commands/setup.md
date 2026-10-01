@@ -28,6 +28,8 @@ curl -fsSL https://opencode.ai/install | bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/opencode-companion.mjs" setup --json $ARGUMENTS
 ```
 
+- The companion also looks in `~/.opencode/bin`, where the installer puts the binary, so the rerun works before the shell PATH is reloaded. If it still reports OpenCode as unavailable, tell the user to restart Claude Code so the updated PATH is picked up.
+
 If OpenCode is already installed:
 - Do not ask about installation.
 

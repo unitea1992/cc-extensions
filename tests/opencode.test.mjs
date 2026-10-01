@@ -13,6 +13,7 @@ import {
   buildRunConfigContent,
   createRunState,
   finalMessageFromState,
+  getOpencodeCommand,
   parseStructuredOutput,
   READ_ONLY_AGENT,
   readOutputSchema,
@@ -279,4 +280,34 @@ test("git hardening appends to an existing GIT_CONFIG_COUNT instead of replacing
   assert.equal(hardening.GIT_CONFIG_KEY_2, "core.fsmonitor");
   assert.equal(hardening.GIT_CONFIG_KEY_0, undefined);
   assert.equal(Number(hardening.GIT_CONFIG_COUNT), 2 + Object.keys(hardening).filter((key) => key.startsWith("GIT_CONFIG_KEY_")).length);
+});
+
+test("review diff collection does not run programs from git config", { skip: process.platform === "win32" }, async () => {
+  const { collectReviewContext, resolveReviewTarget } = await import("../plugins/opencode/scripts/lib/git.mjs");
+  const repo = makeTempDir();
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, ".gitattributes"), "*.txt diff=evil filter=evil\n");
+  fs.writeFileSync(path.join(repo, "f.txt"), "a\n");
+  run("git", ["add", "."], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+  run("git", ["config", "diff.evil.textconv", "sh -c 'touch PWNED_textconv; cat \"$0\"'"], { cwd: repo });
+  run("git", ["config", "filter.evil.clean", "sh -c 'touch PWNED_clean; cat'"], { cwd: repo });
+  run("git", ["config", "core.fsmonitor", "sh -c 'touch PWNED_fsmonitor'"], { cwd: repo });
+  fs.writeFileSync(path.join(repo, "f.txt"), "a\nb\n");
+
+  const context = collectReviewContext(repo, resolveReviewTarget(repo, {}));
+  assert.match(context.content, /\+b/);
+  assert.match(context.content, /diff --git/);
+  assert.deepEqual(fs.readdirSync(repo).filter((name) => name.startsWith("PWNED")), []);
+});
+
+test("the opencode binary is found in ~/.opencode/bin when it is not on PATH", () => {
+  const home = makeTempDir();
+  const binDir = path.join(home, ".opencode", "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(binDir, "opencode"), "#!/bin/sh\n", { mode: 0o755 });
+  const emptyPath = makeTempDir();
+  assert.equal(getOpencodeCommand({ HOME: home, PATH: emptyPath }), path.join(binDir, "opencode"));
+  assert.equal(getOpencodeCommand({ HOME: makeTempDir(), PATH: emptyPath }), "opencode");
+  assert.equal(getOpencodeCommand({ HOME: home, PATH: emptyPath, OPENCODE_COMPANION_BIN: "/custom/opencode" }), "/custom/opencode");
 });

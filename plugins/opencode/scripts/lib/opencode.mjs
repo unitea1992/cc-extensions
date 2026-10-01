@@ -5,6 +5,9 @@
 // OPENCODE_CONFIG_CONTENT for that run only, so the user's OpenCode config files are never edited.
 
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import process from "node:process";
 
 import { readJsonFile } from "./fs.mjs";
@@ -47,8 +50,32 @@ export function getSessionRuntimeStatus() {
   };
 }
 
+function findOnPath(command, env) {
+  const extensions = process.platform === "win32" ? ["", ".cmd", ".exe"] : [""];
+  for (const directory of String(env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+    for (const extension of extensions) {
+      const candidate = path.join(directory, `${command}${extension}`);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+
+// The official installer puts the binary in ~/.opencode/bin and edits shell profiles, which does
+// not reach an already running Claude Code. Fall back to that location so setup works right after
+// installing.
 export function getOpencodeCommand(env = process.env) {
-  return env[OPENCODE_BIN_ENV] || "opencode";
+  if (env[OPENCODE_BIN_ENV]) {
+    return env[OPENCODE_BIN_ENV];
+  }
+  if (findOnPath("opencode", env)) {
+    return "opencode";
+  }
+  const home = env.HOME || env.USERPROFILE || os.homedir();
+  const installed = path.join(home, ".opencode", "bin", process.platform === "win32" ? "opencode.exe" : "opencode");
+  return fs.existsSync(installed) ? installed : "opencode";
 }
 
 export function buildReadOnlyAgentConfig() {
@@ -76,17 +103,20 @@ export function buildReadOnlyAgentConfig() {
 // filters, fsmonitor). Those programs could write files, so neutralize them through GIT_CONFIG_*
 // overrides, which take precedence over every config file and apply to every git the run starts.
 const SAFE_EXTERNAL_DIFF = "sh -c 'diff -u -- \"$2\" \"$5\"; exit 0' companion-diff";
-const DRIVER_KEY_PATTERN = "^(diff|filter)\\..+\\.(textconv|command|clean|smudge|process)$";
+const DRIVER_KEY_PATTERN = "^((diff|filter)\\..+\\.(textconv|command|clean|smudge|process)|diff\\.external)$";
 
 export function buildGitHardeningEnv(cwd, env = process.env) {
-  const overrides = [
-    ["core.fsmonitor", "false"],
-    ["diff.external", SAFE_EXTERNAL_DIFF]
-  ];
+  // diff.external is replaced only when configured; overriding it unconditionally would switch
+  // every `git diff` to the external format.
+  const overrides = [["core.fsmonitor", "false"]];
   const result = runCommand("git", ["config", "--null", "--get-regexp", DRIVER_KEY_PATTERN], { cwd, env });
   if (!result.error && result.status === 0) {
     for (const entry of result.stdout.split("\0")) {
       const key = entry.split("\n", 1)[0];
+      if (key === "diff.external") {
+        overrides.push([key, SAFE_EXTERNAL_DIFF]);
+        continue;
+      }
       const match = /^(diff|filter)\.(.+)\.(textconv|command|clean|smudge|process)$/.exec(key);
       if (!match) {
         continue;

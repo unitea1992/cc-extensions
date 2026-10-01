@@ -1635,17 +1635,18 @@ test("stop hook does not block when OpenCode is unavailable even if the review g
   run("git", ["add", "README.md"], { cwd: repo });
   run("git", ["commit", "-m", "init"], { cwd: repo });
 
+  // Hide every OpenCode install, including the real one on this machine, from both calls.
+  const env = { ...process.env, PATH: "" };
   const setup = run(process.execPath, [SCRIPT, "setup", "--enable-review-gate", "--json"], {
-    cwd: repo
+    cwd: repo,
+    env
   });
   assert.equal(setup.status, 0, setup.stderr);
+  assert.equal(JSON.parse(setup.stdout).opencode.available, false);
 
   const allowed = run(process.execPath, [STOP_HOOK], {
     cwd: repo,
-    env: {
-      ...process.env,
-      PATH: ""
-    },
+    env,
     input: JSON.stringify({ cwd: repo })
   });
 
@@ -2027,4 +2028,31 @@ test("a foreground task cancelled mid-run stays cancelled", async () => {
   const stored = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "jobs", `${running.id}.json`), "utf8"));
   assert.equal(stored.status, "cancelled");
   assert.throws(() => process.kill(running.runnerPid, 0), { code: "ESRCH" });
+});
+
+test("a background job cancelled before its worker starts never runs", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeOpencode(binDir);
+  initGitRepo(repo);
+  const stateDir = resolveStateDir(repo);
+  const jobsDir = path.join(stateDir, "jobs");
+  fs.mkdirSync(jobsDir, { recursive: true });
+  const job = {
+    id: "task-early",
+    status: "cancelled",
+    phase: "cancelled",
+    title: "OpenCode Task",
+    jobClass: "task",
+    workspaceRoot: repo,
+    request: { cwd: repo, prompt: "write things", write: true, jobId: "task-early" }
+  };
+  fs.writeFileSync(path.join(jobsDir, "task-early.json"), JSON.stringify(job), "utf8");
+  fs.writeFileSync(path.join(stateDir, "state.json"), JSON.stringify({ version: 1, config: { stopReviewGate: false }, jobs: [job] }), "utf8");
+
+  const result = run("node", [SCRIPT, "task-worker", "--cwd", repo, "--job-id", "task-early"], { cwd: repo, env: buildEnv(binDir) });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(path.join(binDir, "fake-opencode-state.json")), false, "OpenCode must not be started");
+  const stored = JSON.parse(fs.readFileSync(path.join(jobsDir, "task-early.json"), "utf8"));
+  assert.equal(stored.status, "cancelled");
 });

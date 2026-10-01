@@ -157,6 +157,9 @@ function wasCancelled(workspaceRoot, jobId) {
 }
 
 export async function runTrackedJob(job, runner, options = {}) {
+  if (wasCancelled(job.workspaceRoot, job.id)) {
+    throw new Error(`Job ${job.id} was cancelled before it started.`);
+  }
   const runningRecord = {
     ...job,
     status: "running",

@@ -1,20 +1,38 @@
+// Modified from openai/codex-plugin-cc (Apache-2.0): git calls run with config-launched programs disabled.
+
 import fs from "node:fs";
 import path from "node:path";
 
 import { isProbablyText } from "./fs.mjs";
+import { buildGitHardeningEnv } from "./opencode.mjs";
 import { formatCommandFailure, runCommand, runCommandChecked } from "./process.mjs";
 
 const MAX_UNTRACKED_BYTES = 24 * 1024;
 const DEFAULT_INLINE_DIFF_MAX_FILES = 2;
 const DEFAULT_INLINE_DIFF_MAX_BYTES = 256 * 1024;
 
+// Reviews promise not to run anything that can change the repository, so the companion's own diff
+// collection uses the same overrides as the read-only agent (no textconv, external diff, filters,
+// or fsmonitor programs from git config).
+const hardenedEnvByCwd = new Map();
+
+function hardenedEnv(cwd) {
+  const key = path.resolve(cwd ?? process.cwd());
+  if (!hardenedEnvByCwd.has(key)) {
+    const env = { ...process.env, ...buildGitHardeningEnv(key, process.env) };
+    delete env.GIT_EXTERNAL_DIFF;
+    hardenedEnvByCwd.set(key, env);
+  }
+  return hardenedEnvByCwd.get(key);
+}
+
 // Git is directly executable on Windows. Repository-derived arguments must never pass through a shell.
 function git(cwd, args, options = {}) {
-  return runCommand("git", args, { cwd, ...options, shell: false });
+  return runCommand("git", args, { cwd, env: hardenedEnv(cwd), ...options, shell: false });
 }
 
 function gitChecked(cwd, args, options = {}) {
-  return runCommandChecked("git", args, { cwd, ...options, shell: false });
+  return runCommandChecked("git", args, { cwd, env: hardenedEnv(cwd), ...options, shell: false });
 }
 
 function listUniqueFiles(...groups) {

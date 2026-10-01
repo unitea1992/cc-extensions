@@ -9,6 +9,8 @@ import { spawnSync } from "node:child_process";
 for (const name of ["CLAUDE_PLUGIN_DATA", "OPENCODE_COMPANION_DATA", "OPENCODE_COMPANION_SESSION_ID", "CLAUDE_ENV_FILE", "OPENCODE_CONFIG_CONTENT"]) {
   delete process.env[name];
 }
+// A temporary HOME keeps the companion from finding a real OpenCode install in ~/.opencode/bin.
+process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-plugin-home-"));
 
 export function makeTempDir(prefix = "opencode-plugin-test-") {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));

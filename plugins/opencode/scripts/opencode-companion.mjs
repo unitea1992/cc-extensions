@@ -765,6 +765,11 @@ async function handleTaskWorker(argv) {
     throw new Error(`No stored job found for ${options["job-id"]}.`);
   }
 
+  // The job may have been cancelled (or cleaned up by SessionEnd) before this worker started.
+  if (storedJob.status !== "queued") {
+    return;
+  }
+
   const request = storedJob.request;
   if (!request || typeof request !== "object") {
     throw new Error(`Stored job ${options["job-id"]} is missing its task request payload.`);
