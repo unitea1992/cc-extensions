@@ -110,18 +110,10 @@ export function createJobProgressUpdater(workspaceRoot, jobId) {
       return;
     }
 
-    upsertJob(workspaceRoot, patch);
-
-    const jobFile = resolveJobFile(workspaceRoot, jobId);
-    if (!fs.existsSync(jobFile)) {
+    if (!fs.existsSync(resolveJobFile(workspaceRoot, jobId))) {
       return;
     }
-
-    const storedJob = readJobFile(jobFile);
-    writeJobFile(workspaceRoot, jobId, {
-      ...storedJob,
-      ...patch
-    });
+    upsertJob(workspaceRoot, patch);
     enforceCancelMarker(workspaceRoot, jobId);
   };
 }

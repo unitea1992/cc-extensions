@@ -1,6 +1,7 @@
 // Modified from openai/codex-plugin-cc (Apache-2.0): adapted for the OpenCode companion.
 
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import process from "node:process";
 
 export function runCommand(command, args = [], options = {}) {
@@ -127,6 +128,99 @@ export function terminateProcessTree(pid, options = {}) {
       throw innerError;
     }
   }
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// On Linux, read /proc so exited-but-unreaped (zombie) processes count as stopped: they hold no
+// resources and cannot run anything, but `kill(pid, 0)` still succeeds for them.
+function linuxGroupAlive(pid) {
+  let entries;
+  try {
+    entries = fs.readdirSync("/proc");
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) {
+      continue;
+    }
+    let stat;
+    try {
+      stat = fs.readFileSync(`/proc/${entry}/stat`, "utf8");
+    } catch {
+      continue;
+    }
+    // Fields after the parenthesized command: state ppid pgrp ...
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const state = fields[0];
+    const pgrp = Number(fields[2]);
+    if ((Number(entry) === pid || pgrp === pid) && state !== "Z" && state !== "X") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isAlive(pid, killImpl, platform, useProc) {
+  if (platform === "linux" && useProc) {
+    const alive = linuxGroupAlive(pid);
+    if (alive !== null) {
+      return alive;
+    }
+  }
+  for (const target of [-pid, pid]) {
+    try {
+      killImpl(target, 0);
+      return true;
+    } catch (error) {
+      if (error?.code === "EPERM") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// SIGTERM, wait for the process (group) to go away, and escalate to SIGKILL if it does not.
+// A delivered SIGTERM alone does not prove anything stopped: OpenCode or a command it started can
+// handle or ignore the signal.
+export function stopProcessGroup(pid, options = {}) {
+  if (!Number.isFinite(pid)) {
+    return { attempted: false, stopped: true, forced: false };
+  }
+  const platform = options.platform ?? process.platform;
+  const killImpl = options.killImpl ?? process.kill.bind(process);
+  // Injected kill functions (tests) describe liveness themselves; do not consult /proc then.
+  const useProc = !options.killImpl;
+  const first = terminateProcessTree(pid, options);
+  if (!first.delivered || platform === "win32") {
+    // Already gone, or taskkill /T /F which is forceful by itself.
+    return { attempted: true, stopped: true, forced: false };
+  }
+  const waitUntilGone = (timeoutMs) => {
+    const deadline = Date.now() + timeoutMs;
+    while (isAlive(pid, killImpl, platform, useProc)) {
+      if (Date.now() >= deadline) {
+        return false;
+      }
+      sleepSync(50);
+    }
+    return true;
+  };
+  if (waitUntilGone(options.graceMs ?? 3000)) {
+    return { attempted: true, stopped: true, forced: false };
+  }
+  for (const target of [-pid, pid]) {
+    try {
+      killImpl(target, "SIGKILL");
+    } catch {
+      // Gone in the meantime.
+    }
+  }
+  return { attempted: true, stopped: waitUntilGone(options.killWaitMs ?? 2000), forced: true };
 }
 
 export function formatCommandFailure(result) {

@@ -24,7 +24,7 @@ import {
 } from "./lib/opencode.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
-import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
+import { binaryAvailable, stopProcessGroup } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
   generateJobId,
@@ -51,7 +51,6 @@ import {
   createJobProgressUpdater,
   createJobRecord,
   createProgressReporter,
-  enforceCancelMarker,
   nowIso,
   runTrackedJob,
   SESSION_ID_ENV
@@ -615,16 +614,9 @@ function enqueueBackgroundTask(cwd, job, request) {
   writeJobFile(job.workspaceRoot, job.id, queuedRecord);
   upsertJob(job.workspaceRoot, queuedRecord);
 
-  const child = spawnDetachedTaskWorker(cwd, job.id);
-  if (child.pid) {
-    // The worker may already have marked itself running; only record the pid while still queued.
-    const stored = readStoredJob(job.workspaceRoot, job.id);
-    if (stored?.status === "queued") {
-      writeJobFile(job.workspaceRoot, job.id, { ...stored, pid: child.pid });
-      upsertJob(job.workspaceRoot, { id: job.id, pid: child.pid });
-      enforceCancelMarker(job.workspaceRoot, job.id);
-    }
-  }
+  // The worker records its own pid when it starts running. Writing it from here as well would
+  // race with the worker's own updates to the same job file.
+  spawnDetachedTaskWorker(cwd, job.id);
 
   return {
     payload: {
@@ -902,26 +894,32 @@ async function handleCancel(argv) {
   const runnerPid = existing.runnerPid ?? job.runnerPid ?? null;
 
   // Stop the worker first so it cannot record the interrupted run as failed, then make sure the
-  // OpenCode process group (which owns the private server) is gone as well.
-  terminateProcessTree(job.pid ?? Number.NaN);
-  const runnerStop = terminateProcessTree(runnerPid ?? Number.NaN);
+  // OpenCode process group (which owns the private server) is gone as well, escalating to SIGKILL.
+  const workerStop = stopProcessGroup(job.pid ?? Number.NaN);
+  const runnerStop = stopProcessGroup(runnerPid ?? Number.NaN);
   if (runnerStop.attempted) {
     appendLogLine(
       job.logFile,
-      runnerStop.delivered ? `Stopped OpenCode process group ${runnerPid}.` : `OpenCode process ${runnerPid} had already exited.`
+      runnerStop.stopped
+        ? `Stopped OpenCode process group ${runnerPid}${runnerStop.forced ? " with SIGKILL" : ""}.`
+        : `OpenCode process group ${runnerPid} is still running after SIGKILL.`
     );
   }
   appendLogLine(job.logFile, "Cancelled by user.");
+  const stillRunning = !workerStop.stopped || !runnerStop.stopped;
 
   const completedAt = nowIso();
   const nextJob = {
     ...job,
     status: "cancelled",
     phase: "cancelled",
-    pid: null,
-    runnerPid: null,
+    // Keep the pids when something survived so a second cancel can target it again.
+    pid: workerStop.stopped ? null : job.pid,
+    runnerPid: runnerStop.stopped ? null : runnerPid,
     completedAt,
-    errorMessage: "Cancelled by user."
+    errorMessage: stillRunning
+      ? "Cancelled by user, but a process did not exit. Run /opencode:cancel again."
+      : "Cancelled by user."
   };
 
   writeJobFile(workspaceRoot, job.id, {
@@ -929,21 +927,13 @@ async function handleCancel(argv) {
     ...nextJob,
     cancelledAt: completedAt
   });
-  upsertJob(workspaceRoot, {
-    id: job.id,
-    status: "cancelled",
-    phase: "cancelled",
-    pid: null,
-    runnerPid: null,
-    errorMessage: "Cancelled by user.",
-    completedAt
-  });
 
   const payload = {
     jobId: job.id,
     status: "cancelled",
     title: job.title,
-    runnerStopped: Boolean(runnerStop.delivered)
+    runnerStopped: runnerStop.attempted ? runnerStop.stopped : false,
+    processesStopped: !stillRunning
   };
 
   outputCommandResult(payload, renderCancelReport(nextJob), options.json);

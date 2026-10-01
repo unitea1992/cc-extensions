@@ -16,6 +16,23 @@ const SCRIPT = path.join(PLUGIN_ROOT, "scripts", "opencode-companion.mjs");
 const STOP_HOOK = path.join(PLUGIN_ROOT, "scripts", "stop-review-gate-hook.mjs");
 const SESSION_HOOK = path.join(PLUGIN_ROOT, "scripts", "session-lifecycle-hook.mjs");
 
+// Jobs live in jobs/<id>.json; state.json may still hold jobs seeded in the older index format.
+function readStateSnapshot(stateDir) {
+  const stateFile = path.join(stateDir, "state.json");
+  const parsed = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, "utf8")) : {};
+  const jobsDir = path.join(stateDir, "jobs");
+  const fromFiles = fs.existsSync(jobsDir)
+    ? fs.readdirSync(jobsDir).filter((name) => name.endsWith(".json")).map((name) => readJobFile(path.join(jobsDir, name)))
+    : [];
+  const legacy = new Map((parsed.jobs ?? []).map((job) => [job.id, job]));
+  const jobs = fromFiles.map((job) => {
+    const merged = { ...(legacy.get(job.id) ?? {}), ...job };
+    legacy.delete(job.id);
+    return merged;
+  });
+  return { ...parsed, jobs: [...jobs, ...legacy.values()] };
+}
+
 async function waitFor(predicate, { timeoutMs = 5000, intervalMs = 50 } = {}) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -214,7 +231,7 @@ test("review logs reasoning and the assistant output to the job log", () => {
 
   assert.equal(result.status, 0, result.stderr);
   const stateDir = resolveStateDir(repo);
-  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  const state = readStateSnapshot(stateDir);
   const log = fs.readFileSync(state.jobs[0].logFile, "utf8");
   assert.match(log, /Reasoning/);
   assert.match(log, /Inspected the prompt, gathered evidence, and checked the highest-risk paths first/);
@@ -544,7 +561,7 @@ test("task logs reasoning and assistant messages to the job log", () => {
 
   assert.equal(result.status, 0, result.stderr);
   const stateDir = resolveStateDir(repo);
-  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  const state = readStateSnapshot(stateDir);
   const log = fs.readFileSync(state.jobs[0].logFile, "utf8");
   assert.match(log, /Reasoning/);
   assert.match(log, /Inspected the prompt, gathered evidence, and checked the highest-risk paths first/);
@@ -1255,7 +1272,7 @@ test("cancel stops an active background job and marks it cancelled", async (t) =
     }
   });
 
-  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  const state = readStateSnapshot(stateDir);
   const cancelled = state.jobs.find((job) => job.id === "task-live");
   assert.equal(cancelled.status, "cancelled");
   assert.equal(cancelled.pid, null);
@@ -1316,7 +1333,7 @@ test("cancel without a job id ignores active jobs from other Claude sessions", (
   assert.equal(cancel.status, 1);
   assert.match(cancel.stderr, /No active OpenCode jobs to cancel for this session\./);
 
-  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  const state = readStateSnapshot(stateDir);
   assert.equal(state.jobs[0].status, "running");
 });
 
@@ -1364,7 +1381,7 @@ test("cancel with a job id can still target an active job from another Claude se
   assert.equal(cancel.status, 0, cancel.stderr);
   assert.equal(JSON.parse(cancel.stdout).jobId, "task-other");
 
-  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  const state = readStateSnapshot(stateDir);
   assert.equal(state.jobs[0].status, "cancelled");
 });
 
@@ -1484,7 +1501,7 @@ test("session end fully cleans up jobs for the ending session", async (t) => {
     }
   });
 
-  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  const state = readStateSnapshot(stateDir);
   assert.deepEqual(state.jobs.map((job) => job.id), ["review-other"]);
   const otherJob = state.jobs[0];
   assert.equal(otherJob.logFile, otherSessionLog);
@@ -1819,7 +1836,7 @@ for (const [behavior, pattern] of [
 
     assert.equal(result.status, 1);
     assert.match(result.stdout, pattern);
-    const state = JSON.parse(fs.readFileSync(path.join(resolveStateDir(repo), "state.json"), "utf8"));
+    const state = readStateSnapshot(resolveStateDir(repo));
     assert.equal(state.jobs[0].status, "failed");
     assert.equal(state.jobs[0].runnerPid, null);
   });
@@ -1918,7 +1935,7 @@ test("cancel stops the OpenCode process group of a running background task", asy
 
   const stateFile = path.join(resolveStateDir(repo), "state.json");
   const runningJob = await waitFor(() => {
-    const job = JSON.parse(fs.readFileSync(stateFile, "utf8")).jobs.find((entry) => entry.id === jobId);
+    const job = readStateSnapshot(path.dirname(stateFile)).jobs.find((entry) => entry.id === jobId);
     return job?.status === "running" && job.runnerPid ? job : null;
   }, { timeoutMs: 10000 });
   const fakePid = await waitFor(() => {
@@ -1952,7 +1969,7 @@ test("cancel stops the OpenCode process group of a running background task", asy
     }
   });
 
-  const job = JSON.parse(fs.readFileSync(stateFile, "utf8")).jobs.find((entry) => entry.id === jobId);
+  const job = readStateSnapshot(path.dirname(stateFile)).jobs.find((entry) => entry.id === jobId);
   assert.equal(job.status, "cancelled");
   assert.equal(job.runnerPid, null);
 });
@@ -2014,10 +2031,7 @@ test("a foreground task cancelled mid-run stays cancelled", async () => {
   const exited = new Promise((resolve) => child.on("exit", resolve));
   const stateFile = path.join(resolveStateDir(repo), "state.json");
   const running = await waitFor(() => {
-    if (!fs.existsSync(stateFile)) {
-      return null;
-    }
-    const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    const state = readStateSnapshot(path.dirname(stateFile));
     return state.jobs.find((job) => job.status === "running" && job.runnerPid) ?? null;
   });
 

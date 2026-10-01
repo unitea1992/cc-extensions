@@ -18,7 +18,7 @@ const MAX_JOBS = 50;
 // Workers, cancel, and hooks run as separate processes; write through a rename so a reader never
 // sees a half-written JSON file.
 function writeJsonAtomic(filePath, value) {
-  const tempFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  const tempFile = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   fs.writeFileSync(tempFile, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   fs.renameSync(tempFile, filePath);
 }
@@ -82,174 +82,111 @@ export function ensureStateDir(cwd) {
 }
 
 // A cancel marker always wins over whatever status a job record carries, so readers never show a
-// cancelled job as queued or running even if some writer persisted an older copy.
+// cancelled job as queued or running even if a worker persisted an older copy after the cancel.
 function applyCancelMarker(cwd, job) {
   if (!job?.id || job.status === "cancelled" || !fs.existsSync(path.join(resolveJobsDir(cwd), `${job.id}.cancelled`))) {
     return job;
   }
-  return { ...job, status: "cancelled", phase: "cancelled", pid: null, runnerPid: null };
+  return markedCancelled(job);
+}
+
+function markedCancelled(job) {
+  return {
+    ...job,
+    status: "cancelled",
+    phase: "cancelled",
+    pid: null,
+    runnerPid: null,
+    errorMessage: job.errorMessage ?? "Cancelled by user."
+  };
+}
+
+function readStateFile(cwd) {
+  const stateFile = resolveStateFile(cwd);
+  if (!fs.existsSync(stateFile)) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+// Each job lives in its own jobs/<id>.json, written atomically. There is no shared job index to
+// read-modify-write, so concurrent workers, cancels, and hooks can never overwrite each other's
+// jobs. state.json only holds the configuration (and is read for jobs written by older versions).
+function listJobFiles(cwd) {
+  const jobsDir = resolveJobsDir(cwd);
+  if (!fs.existsSync(jobsDir)) {
+    return [];
+  }
+  const jobs = [];
+  for (const name of fs.readdirSync(jobsDir)) {
+    if (!name.endsWith(".json")) {
+      continue;
+    }
+    try {
+      jobs.push(readJobFile(path.join(jobsDir, name)));
+    } catch {
+      // Ignore a file that vanished or is unreadable; atomic writes never leave partial JSON.
+    }
+  }
+  return jobs;
 }
 
 export function loadState(cwd) {
-  const stateFile = resolveStateFile(cwd);
-  if (!fs.existsSync(stateFile)) {
-    return defaultState();
+  const parsed = readStateFile(cwd);
+  // Older versions split each job between an index entry in state.json and its job file; merge
+  // both so jobs recorded before an upgrade keep every field. The job file is newer and wins.
+  const legacyById = new Map(
+    (Array.isArray(parsed.jobs) ? parsed.jobs : []).filter((job) => job?.id).map((job) => [job.id, job])
+  );
+  const jobs = listJobFiles(cwd).map((job) => {
+    const legacy = legacyById.get(job.id);
+    legacyById.delete(job.id);
+    return legacy ? applyCancelMarker(cwd, { ...legacy, ...job }) : job;
+  });
+  for (const legacy of legacyById.values()) {
+    jobs.push(applyCancelMarker(cwd, legacy));
   }
-
-  try {
-    const parsed = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-    return {
-      ...defaultState(),
-      ...parsed,
-      config: {
-        ...defaultState().config,
-        ...(parsed.config ?? {})
-      },
-      jobs: Array.isArray(parsed.jobs) ? parsed.jobs.map((job) => applyCancelMarker(cwd, job)) : []
-    };
-  } catch {
-    return defaultState();
-  }
-}
-
-const LOCK_FILE_NAME = "state.lock";
-const LOCK_TIMEOUT_MS = 30000;
-const TAKEOVER_STALE_MS = 5000;
-
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function readLockOwner(lockFile) {
-  try {
-    return JSON.parse(fs.readFileSync(lockFile, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function processIsAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code === "EPERM";
-  }
-}
-
-// Removing a dead owner's lock is itself serialized through a short-lived takeover directory, and
-// the owner is re-read after acquiring it. Without this, two waiters that both saw the same dead
-// lock could each delete it, and the second would delete the fresh lock the first one just took.
-function removeLockIfOwnerDead(lockFile) {
-  const takeoverDir = `${lockFile}.takeover`;
-  try {
-    fs.mkdirSync(takeoverDir);
-  } catch (error) {
-    if (error?.code !== "EEXIST") {
-      throw error;
-    }
-    try {
-      if (Date.now() - fs.statSync(takeoverDir).mtimeMs > TAKEOVER_STALE_MS) {
-        fs.rmSync(takeoverDir, { recursive: true, force: true });
-      }
-    } catch {
-      // Another waiter is handling it.
-    }
-    return;
-  }
-  try {
-    const owner = readLockOwner(lockFile);
-    // An unreadable owner means the creator died between creating and writing the file.
-    const orphaned = !owner && Date.now() - fs.statSync(lockFile).mtimeMs > TAKEOVER_STALE_MS;
-    if (orphaned || (owner && !processIsAlive(owner.pid))) {
-      fs.rmSync(lockFile, { force: true });
-    }
-  } finally {
-    fs.rmSync(takeoverDir, { recursive: true, force: true });
-  }
-}
-
-// Workers, cancel, setup, and hooks all rewrite the shared index; serialize every
-// read-modify-write so one process can never write back a stale copy over another's update.
-// The lock file records its owner, only the owner releases it, and it is reclaimed only once the
-// owning process has exited.
-export function withStateLock(cwd, fn) {
-  ensureStateDir(cwd);
-  const lockFile = path.join(resolveStateDir(cwd), LOCK_FILE_NAME);
-  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  for (;;) {
-    try {
-      fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, token }), { flag: "wx" });
-      break;
-    } catch (error) {
-      if (error?.code !== "EEXIST") {
-        throw error;
-      }
-      removeLockIfOwnerDead(lockFile);
-      if (Date.now() > deadline) {
-        throw new Error(`Timed out waiting for the companion state lock at ${lockFile}.`);
-      }
-      sleepSync(15);
-    }
-  }
-  try {
-    return fn();
-  } finally {
-    if (readLockOwner(lockFile)?.token === token) {
-      fs.rmSync(lockFile, { force: true });
-    }
-  }
-}
-
-function pruneJobs(jobs) {
-  return [...jobs]
-    .sort((left, right) => String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? "")))
-    .slice(0, MAX_JOBS);
+  return {
+    ...defaultState(),
+    config: {
+      ...defaultState().config,
+      ...(parsed.config ?? {})
+    },
+    jobs
+  };
 }
 
 function removeFileIfExists(filePath) {
   if (filePath && fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
-  }
-}
-
-export function saveState(cwd, state) {
-  const previousJobs = loadState(cwd).jobs;
-  ensureStateDir(cwd);
-  const nextJobs = pruneJobs(state.jobs ?? []);
-  const nextState = {
-    version: STATE_VERSION,
-    config: {
-      ...defaultState().config,
-      ...(state.config ?? {})
-    },
-    jobs: nextJobs
-  };
-
-  const retainedIds = new Set(nextJobs.map((job) => job.id));
-  for (const job of previousJobs) {
-    if (retainedIds.has(job.id)) {
-      continue;
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      // Already removed by another process.
     }
-    removeJobFile(resolveJobFile(cwd, job.id));
-    removeFileIfExists(job.logFile);
-    removeFileIfExists(resolveCancelMarkerFile(cwd, job.id));
   }
-
-  writeJsonAtomic(resolveStateFile(cwd), nextState);
-  return nextState;
 }
 
-export function updateState(cwd, mutate) {
-  return withStateLock(cwd, () => {
-    const state = loadState(cwd);
-    mutate(state);
-    return saveState(cwd, state);
-  });
+export function removeJobArtifacts(cwd, job) {
+  removeFileIfExists(resolveJobFile(cwd, job.id));
+  removeFileIfExists(job.logFile);
+  removeFileIfExists(resolveCancelMarkerFile(cwd, job.id));
+}
+
+// Keep the newest MAX_JOBS jobs. Active jobs are never pruned.
+function pruneJobs(cwd) {
+  const jobs = listJobFiles(cwd).sort((left, right) =>
+    String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? ""))
+  );
+  for (const job of jobs.slice(MAX_JOBS)) {
+    if (job.status !== "queued" && job.status !== "running") {
+      removeJobArtifacts(cwd, job);
+    }
+  }
 }
 
 export function generateJobId(prefix = "job") {
@@ -258,36 +195,47 @@ export function generateJobId(prefix = "job") {
 }
 
 export function upsertJob(cwd, jobPatch) {
-  return updateState(cwd, (state) => {
-    const timestamp = nowIso();
-    const existingIndex = state.jobs.findIndex((job) => job.id === jobPatch.id);
-    if (existingIndex === -1) {
-      state.jobs.unshift({
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        ...jobPatch
-      });
-      return;
-    }
-    state.jobs[existingIndex] = {
-      ...state.jobs[existingIndex],
-      ...jobPatch,
-      updatedAt: timestamp
-    };
-  });
+  const jobFile = resolveJobFile(cwd, jobPatch.id);
+  const existing = fs.existsSync(jobFile) ? readJobFileRaw(jobFile) : null;
+  const timestamp = nowIso();
+  const next = existing
+    ? { ...existing, ...jobPatch, updatedAt: timestamp }
+    : { createdAt: timestamp, ...jobPatch, updatedAt: timestamp };
+  writeJsonAtomic(jobFile, next);
+  if (!existing) {
+    pruneJobs(cwd);
+  }
+  return next;
 }
 
 export function listJobs(cwd) {
   return loadState(cwd).jobs;
 }
 
+// Only `setup` writes the configuration, so a plain atomic rewrite is enough here.
 export function setConfig(cwd, key, value) {
-  return updateState(cwd, (state) => {
-    state.config = {
-      ...state.config,
+  ensureStateDir(cwd);
+  const parsed = readStateFile(cwd);
+  const next = {
+    ...parsed,
+    version: STATE_VERSION,
+    config: {
+      ...defaultState().config,
+      ...(parsed.config ?? {}),
       [key]: value
-    };
-  });
+    }
+  };
+  writeJsonAtomic(resolveStateFile(cwd), next);
+  return next;
+}
+
+// Older versions kept jobs in state.json; drop a finished session's entries from there too.
+export function removeLegacySessionJobs(cwd, sessionId) {
+  const parsed = readStateFile(cwd);
+  if (!Array.isArray(parsed.jobs) || !parsed.jobs.some((job) => job?.sessionId === sessionId)) {
+    return;
+  }
+  writeJsonAtomic(resolveStateFile(cwd), { ...parsed, jobs: parsed.jobs.filter((job) => job?.sessionId !== sessionId) });
 }
 
 export function getConfig(cwd) {
@@ -297,7 +245,7 @@ export function getConfig(cwd) {
 export function writeJobFile(cwd, jobId, payload) {
   ensureStateDir(cwd);
   const jobFile = resolveJobFile(cwd, jobId);
-  writeJsonAtomic(jobFile, payload);
+  writeJsonAtomic(jobFile, { ...payload, id: payload.id ?? jobId, updatedAt: nowIso() });
   return jobFile;
 }
 
@@ -311,15 +259,9 @@ export function readJobFile(jobFile) {
   const job = JSON.parse(fs.readFileSync(jobFile, "utf8"));
   const marker = jobFile.replace(/\.json$/, ".cancelled");
   if (job?.status !== "cancelled" && marker !== jobFile && fs.existsSync(marker)) {
-    return { ...job, status: "cancelled", phase: "cancelled", pid: null, runnerPid: null };
+    return markedCancelled(job);
   }
   return job;
-}
-
-function removeJobFile(jobFile) {
-  if (fs.existsSync(jobFile)) {
-    fs.unlinkSync(jobFile);
-  }
 }
 
 export function resolveJobLogFile(cwd, jobId) {

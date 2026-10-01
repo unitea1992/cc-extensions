@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { makeTempDir } from "./helpers.mjs";
-import { resolveJobFile, resolveJobLogFile, resolvePluginDataDir, resolveStateDir, resolveStateFile, saveState } from "../plugins/opencode/scripts/lib/state.mjs";
+import { resolveJobFile, resolveJobLogFile, resolvePluginDataDir, resolveStateDir, resolveStateFile, upsertJob, writeJobFile } from "../plugins/opencode/scripts/lib/state.mjs";
 
 test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   const workspace = makeTempDir();
@@ -45,68 +45,36 @@ test("another plugin's CLAUDE_PLUGIN_DATA in the shared session env is ignored",
   );
 });
 
-test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", () => {
+test("creating a job prunes the oldest finished jobs beyond the cap and keeps active ones", () => {
+  const workspace = makeTempDir();
+  const total = 53;
+  for (let index = 0; index < total; index += 1) {
+    const id = `job-${String(index).padStart(2, "0")}`;
+    const logFile = resolveJobLogFile(workspace, id);
+    fs.writeFileSync(logFile, "log\n");
+    // job-00 stays running even though it is the oldest.
+    writeJobFile(workspace, id, { id, status: index === 0 ? "running" : "completed", logFile });
+  }
+  upsertJob(workspace, { id: "job-new", status: "queued" });
+
+  const remaining = fs.readdirSync(path.dirname(resolveJobFile(workspace, "job-new"))).filter((name) => name.endsWith(".json"));
+  assert.equal(remaining.includes("job-00.json"), true, "an active job is never pruned");
+  assert.equal(remaining.includes("job-new.json"), true);
+  assert.equal(remaining.length, 51);
+  assert.equal(fs.existsSync(resolveJobLogFile(workspace, "job-01")), false, "pruned jobs lose their log too");
+});
+
+test("config updates keep jobs written by older versions in state.json", () => {
   const workspace = makeTempDir();
   const stateFile = resolveStateFile(workspace);
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-
-  const jobs = Array.from({ length: 51 }, (_, index) => {
-    const jobId = `job-${index}`;
-    const updatedAt = new Date(Date.UTC(2026, 0, 1, 0, index, 0)).toISOString();
-    const logFile = resolveJobLogFile(workspace, jobId);
-    const jobFile = resolveJobFile(workspace, jobId);
-    fs.writeFileSync(logFile, `log ${jobId}\n`, "utf8");
-    fs.writeFileSync(jobFile, JSON.stringify({ id: jobId, status: "completed" }, null, 2), "utf8");
-    return {
-      id: jobId,
-      status: "completed",
-      logFile,
-      updatedAt,
-      createdAt: updatedAt
-    };
+  fs.writeFileSync(stateFile, JSON.stringify({ version: 1, config: { stopReviewGate: false }, jobs: [{ id: "old", status: "completed" }] }));
+  return import("../plugins/opencode/scripts/lib/state.mjs").then(({ setConfig, loadState }) => {
+    setConfig(workspace, "stopReviewGate", true);
+    const state = loadState(workspace);
+    assert.equal(state.config.stopReviewGate, true);
+    assert.deepEqual(state.jobs.map((job) => job.id), ["old"]);
   });
-
-  fs.writeFileSync(
-    stateFile,
-    `${JSON.stringify(
-      {
-        version: 1,
-        config: { stopReviewGate: false },
-        jobs
-      },
-      null,
-      2
-    )}\n`,
-    "utf8"
-  );
-
-  saveState(workspace, {
-    version: 1,
-    config: { stopReviewGate: false },
-    jobs
-  });
-
-  const prunedJobFile = resolveJobFile(workspace, "job-0");
-  const prunedLogFile = resolveJobLogFile(workspace, "job-0");
-  const retainedJobFile = resolveJobFile(workspace, "job-50");
-  const retainedLogFile = resolveJobLogFile(workspace, "job-50");
-  const jobsDir = path.dirname(prunedJobFile);
-
-  assert.equal(fs.existsSync(retainedJobFile), true);
-  assert.equal(fs.existsSync(retainedLogFile), true);
-
-  const savedState = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-  assert.equal(savedState.jobs.length, 50);
-  assert.deepEqual(
-    savedState.jobs.map((job) => job.id),
-    Array.from({ length: 50 }, (_, index) => `job-${50 - index}`)
-  );
-  assert.deepEqual(
-    fs.readdirSync(jobsDir).sort(),
-    Array.from({ length: 50 }, (_, index) => `job-${index + 1}`)
-      .flatMap((jobId) => [`${jobId}.json`, `${jobId}.log`])
-      .sort()
-  );
 });
 
 test("a stale write after cancel is reverted to cancelled when the cancel marker exists", async () => {
@@ -126,7 +94,7 @@ test("a stale write after cancel is reverted to cancelled when the cancel marker
   assert.equal(loadState(workspace).jobs.find((job) => job.id === "task-x").status, "cancelled");
 });
 
-test("concurrent index updates from separate processes are never lost", async () => {
+test("concurrent job updates from separate processes are never lost", async () => {
   const { spawn } = await import("node:child_process");
   const workspace = makeTempDir();
   const stateModule = new URL("../plugins/opencode/scripts/lib/state.mjs", import.meta.url).href;
@@ -149,7 +117,7 @@ test("concurrent index updates from separate processes are never lost", async ()
   assert.equal(loadState(workspace).jobs.length, 40);
 });
 
-test("readers show a marked job as cancelled even if an older index copy says running", async () => {
+test("readers show a marked job as cancelled even if a later write says running", async () => {
   const { loadState, markJobCancelled, upsertJob, writeJobFile, readJobFile } = await import("../plugins/opencode/scripts/lib/state.mjs");
   const workspace = makeTempDir();
   upsertJob(workspace, { id: "task-a", status: "running", pid: 7 });
@@ -157,37 +125,6 @@ test("readers show a marked job as cancelled even if an older index copy says ru
   markJobCancelled(workspace, "task-a");
   assert.equal(loadState(workspace).jobs[0].status, "cancelled");
   assert.equal(readJobFile(resolveJobFile(workspace, "task-a")).status, "cancelled");
-});
-
-test("the state lock is reclaimed from a dead owner but never taken from a live one", async () => {
-  const { withStateLock } = await import("../plugins/opencode/scripts/lib/state.mjs");
-  const { spawnSync } = await import("node:child_process");
-  const workspace = makeTempDir();
-  const lockFile = path.join(resolveStateDir(workspace), "state.lock");
-  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
-
-  // A pid that has certainly exited.
-  const deadPid = spawnSync(process.execPath, ["-e", "process.exit(0)"]).pid;
-  fs.writeFileSync(lockFile, JSON.stringify({ pid: deadPid, token: "dead" }));
-  assert.equal(withStateLock(workspace, () => "ran"), "ran");
-  assert.equal(fs.existsSync(lockFile), false);
-
-  // A live owner (this process, other token) keeps its lock: a second process keeps waiting and is
-  // killed by the timeout without ever entering the critical section.
-  fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, token: "someone-else" }));
-  const waiter = spawnSync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "-e",
-      `const { withStateLock } = await import(${JSON.stringify(new URL("../plugins/opencode/scripts/lib/state.mjs", import.meta.url).href)});
-       withStateLock(${JSON.stringify(workspace)}, () => console.log("acquired"));`
-    ],
-    { encoding: "utf8", timeout: 1000 }
-  );
-  assert.equal(waiter.stdout.trim(), "");
-  assert.equal(JSON.parse(fs.readFileSync(lockFile, "utf8")).token, "someone-else");
-  fs.rmSync(lockFile);
 });
 
 test("readJobFileRaw keeps the real pids of a cancel-marked job for the cancel path", async () => {

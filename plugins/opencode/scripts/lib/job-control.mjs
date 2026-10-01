@@ -3,7 +3,7 @@
 import fs from "node:fs";
 
 import { getSessionRuntimeStatus } from "./opencode.mjs";
-import { getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
+import { getConfig, listJobs, readJobFile, readJobFileRaw, resolveJobFile } from "./state.mjs";
 import { SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
@@ -284,13 +284,27 @@ export function resolveResultJob(cwd, reference) {
   throw new Error("No finished OpenCode jobs found for this repository yet.");
 }
 
+function hasSurvivingProcess(workspaceRoot, job) {
+  if (job.status !== "cancelled") {
+    return false;
+  }
+  const jobFile = resolveJobFile(workspaceRoot, job.id);
+  if (!fs.existsSync(jobFile)) {
+    return false;
+  }
+  const raw = readJobFileRaw(jobFile);
+  return Boolean(raw.pid || raw.runnerPid);
+}
+
 export function resolveCancelableJob(cwd, reference, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const jobs = sortJobsNewestFirst(listJobs(workspaceRoot));
   const activeJobs = jobs.filter((job) => job.status === "queued" || job.status === "running");
 
   if (reference) {
-    const selected = matchJobReference(activeJobs, reference);
+    // A cancelled job whose stored record still has pids had a process survive the last cancel.
+    const cancelable = jobs.filter((job) => activeJobs.includes(job) || hasSurvivingProcess(workspaceRoot, job));
+    const selected = matchJobReference(cancelable, reference);
     if (!selected) {
       throw new Error(`No active job found for "${reference}".`);
     }

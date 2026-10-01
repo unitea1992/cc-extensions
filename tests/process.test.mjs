@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { terminateProcessTree } from "../plugins/opencode/scripts/lib/process.mjs";
+import { stopProcessGroup, terminateProcessTree } from "../plugins/opencode/scripts/lib/process.mjs";
 
 test("terminateProcessTree uses taskkill on Windows", () => {
   let captured = null;
@@ -74,4 +74,36 @@ test("terminateProcessTree falls back to the pid when the process is not a group
   ]);
   assert.equal(outcome.delivered, true);
   assert.equal(outcome.method, "process");
+});
+
+test("stopProcessGroup escalates to SIGKILL when SIGTERM is ignored", () => {
+  const sent = [];
+  let alive = true;
+  const outcome = stopProcessGroup(999, {
+    platform: "linux",
+    graceMs: 60,
+    killWaitMs: 60,
+    killImpl(pid, signal) {
+      if (signal === 0) {
+        if (!alive) {
+          const error = new Error("gone");
+          error.code = "ESRCH";
+          throw error;
+        }
+        return;
+      }
+      sent.push([pid, signal]);
+      if (signal === "SIGKILL") {
+        alive = false;
+      }
+    }
+  });
+  assert.deepEqual(sent[0], [-999, "SIGTERM"]);
+  assert.ok(sent.some(([, signal]) => signal === "SIGKILL"));
+  assert.deepEqual(outcome, { attempted: true, stopped: true, forced: true });
+});
+
+test("stopProcessGroup reports a process that survives SIGKILL", () => {
+  const outcome = stopProcessGroup(998, { platform: "linux", graceMs: 30, killWaitMs: 30, killImpl() {} });
+  assert.equal(outcome.stopped, false);
 });
