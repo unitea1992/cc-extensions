@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { makeTempDir } from "./helpers.mjs";
-import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState } from "../plugins/opencode/scripts/lib/state.mjs";
+import { resolveJobFile, resolveJobLogFile, resolvePluginDataDir, resolveStateDir, resolveStateFile, saveState } from "../plugins/opencode/scripts/lib/state.mjs";
 
 test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   const workspace = makeTempDir();
@@ -16,28 +16,33 @@ test("resolveStateDir uses a temp-backed per-workspace directory", () => {
   assert.match(stateDir, new RegExp(`^${os.tmpdir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 });
 
-test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
+test("resolveStateDir uses this plugin's data dir when it is provided", () => {
   const workspace = makeTempDir();
-  const pluginDataDir = makeTempDir();
-  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
-  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
+  const pluginDataDir = path.join(makeTempDir(), "opencode-cc-extensions");
+  const previous = process.env.OPENCODE_COMPANION_DATA;
+  process.env.OPENCODE_COMPANION_DATA = pluginDataDir;
 
   try {
     const stateDir = resolveStateDir(workspace);
-
     assert.equal(stateDir.startsWith(path.join(pluginDataDir, "state")), true);
     assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
-    assert.match(
-      stateDir,
-      new RegExp(`^${path.join(pluginDataDir, "state").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)
-    );
   } finally {
-    if (previousPluginDataDir == null) {
-      delete process.env.CLAUDE_PLUGIN_DATA;
+    if (previous == null) {
+      delete process.env.OPENCODE_COMPANION_DATA;
     } else {
-      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
+      process.env.OPENCODE_COMPANION_DATA = previous;
     }
   }
+});
+
+test("another plugin's CLAUDE_PLUGIN_DATA in the shared session env is ignored", () => {
+  // codex-plugin-cc exports CLAUDE_PLUGIN_DATA into the same session env file.
+  assert.equal(resolvePluginDataDir({ CLAUDE_PLUGIN_DATA: "/data/codex-openai-codex" }), null);
+  assert.equal(resolvePluginDataDir({ CLAUDE_PLUGIN_DATA: "/data/opencode-cc-extensions" }), "/data/opencode-cc-extensions");
+  assert.equal(
+    resolvePluginDataDir({ CLAUDE_PLUGIN_DATA: "/data/codex-openai-codex", OPENCODE_COMPANION_DATA: "/data/opencode-cc-extensions" }),
+    "/data/opencode-cc-extensions"
+  );
 });
 
 test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", () => {

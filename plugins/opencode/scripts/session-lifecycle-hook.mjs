@@ -7,7 +7,7 @@ import process from "node:process";
 // so SessionEnd only stops this session's running OpenCode jobs.
 
 import { terminateProcessTree } from "./lib/process.mjs";
-import { loadState, resolveStateFile, saveState } from "./lib/state.mjs";
+import { COMPANION_DATA_ENV, loadState, resolveStateFile, saveState } from "./lib/state.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 export const SESSION_ID_ENV = "OPENCODE_COMPANION_SESSION_ID";
@@ -71,7 +71,9 @@ function cleanupSessionJobs(cwd, sessionId) {
 
 function handleSessionStart(input) {
   appendEnvVar(SESSION_ID_ENV, input.session_id);
-  appendEnvVar(PLUGIN_DATA_ENV, process.env[PLUGIN_DATA_ENV]);
+  // Export under a companion-specific name: writing CLAUDE_PLUGIN_DATA to the shared env file
+  // would redirect other plugins that read the same variable (and vice versa).
+  appendEnvVar(COMPANION_DATA_ENV, process.env[PLUGIN_DATA_ENV]);
 }
 
 function handleSessionEnd(input) {

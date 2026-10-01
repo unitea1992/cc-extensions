@@ -438,7 +438,7 @@ test("session start hook exports the Claude session id and plugin data dir", () 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(
     fs.readFileSync(envFile, "utf8"),
-    `export OPENCODE_COMPANION_SESSION_ID='sess-current'\nexport CLAUDE_PLUGIN_DATA='${pluginDataDir}'\n`
+    `export OPENCODE_COMPANION_SESSION_ID='sess-current'\nexport OPENCODE_COMPANION_DATA='${pluginDataDir}'\n`
   );
 });
 

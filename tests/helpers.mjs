@@ -6,7 +6,7 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 
 // Tests must never read or write the state of a real Claude Code session that happens to run them.
-for (const name of ["CLAUDE_PLUGIN_DATA", "OPENCODE_COMPANION_SESSION_ID", "CLAUDE_ENV_FILE", "OPENCODE_CONFIG_CONTENT"]) {
+for (const name of ["CLAUDE_PLUGIN_DATA", "OPENCODE_COMPANION_DATA", "OPENCODE_COMPANION_SESSION_ID", "CLAUDE_ENV_FILE", "OPENCODE_CONFIG_CONTENT"]) {
   delete process.env[name];
 }
 
