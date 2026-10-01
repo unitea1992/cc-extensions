@@ -112,38 +112,86 @@ export function loadState(cwd) {
   }
 }
 
-const LOCK_DIR_NAME = "state.lock";
+const LOCK_FILE_NAME = "state.lock";
 const LOCK_TIMEOUT_MS = 30000;
-const LOCK_STALE_MS = 10000;
+const TAKEOVER_STALE_MS = 5000;
 
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function readLockOwner(lockFile) {
+  try {
+    return JSON.parse(fs.readFileSync(lockFile, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+// Removing a dead owner's lock is itself serialized through a short-lived takeover directory, and
+// the owner is re-read after acquiring it. Without this, two waiters that both saw the same dead
+// lock could each delete it, and the second would delete the fresh lock the first one just took.
+function removeLockIfOwnerDead(lockFile) {
+  const takeoverDir = `${lockFile}.takeover`;
+  try {
+    fs.mkdirSync(takeoverDir);
+  } catch (error) {
+    if (error?.code !== "EEXIST") {
+      throw error;
+    }
+    try {
+      if (Date.now() - fs.statSync(takeoverDir).mtimeMs > TAKEOVER_STALE_MS) {
+        fs.rmSync(takeoverDir, { recursive: true, force: true });
+      }
+    } catch {
+      // Another waiter is handling it.
+    }
+    return;
+  }
+  try {
+    const owner = readLockOwner(lockFile);
+    // An unreadable owner means the creator died between creating and writing the file.
+    const orphaned = !owner && Date.now() - fs.statSync(lockFile).mtimeMs > TAKEOVER_STALE_MS;
+    if (orphaned || (owner && !processIsAlive(owner.pid))) {
+      fs.rmSync(lockFile, { force: true });
+    }
+  } finally {
+    fs.rmSync(takeoverDir, { recursive: true, force: true });
+  }
+}
+
 // Workers, cancel, setup, and hooks all rewrite the shared index; serialize every
 // read-modify-write so one process can never write back a stale copy over another's update.
+// The lock file records its owner, only the owner releases it, and it is reclaimed only once the
+// owning process has exited.
 export function withStateLock(cwd, fn) {
   ensureStateDir(cwd);
-  const lockDir = path.join(resolveStateDir(cwd), LOCK_DIR_NAME);
+  const lockFile = path.join(resolveStateDir(cwd), LOCK_FILE_NAME);
+  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   for (;;) {
     try {
-      fs.mkdirSync(lockDir);
+      fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, token }), { flag: "wx" });
       break;
     } catch (error) {
       if (error?.code !== "EEXIST") {
         throw error;
       }
-      try {
-        if (Date.now() - fs.statSync(lockDir).mtimeMs > LOCK_STALE_MS) {
-          fs.rmSync(lockDir, { recursive: true, force: true });
-          continue;
-        }
-      } catch {
-        continue;
-      }
+      removeLockIfOwnerDead(lockFile);
       if (Date.now() > deadline) {
-        throw new Error(`Timed out waiting for the companion state lock at ${lockDir}.`);
+        throw new Error(`Timed out waiting for the companion state lock at ${lockFile}.`);
       }
       sleepSync(15);
     }
@@ -151,7 +199,9 @@ export function withStateLock(cwd, fn) {
   try {
     return fn();
   } finally {
-    fs.rmSync(lockDir, { recursive: true, force: true });
+    if (readLockOwner(lockFile)?.token === token) {
+      fs.rmSync(lockFile, { force: true });
+    }
   }
 }
 
@@ -249,6 +299,12 @@ export function writeJobFile(cwd, jobId, payload) {
   const jobFile = resolveJobFile(cwd, jobId);
   writeJsonAtomic(jobFile, payload);
   return jobFile;
+}
+
+// Returns the record exactly as stored, without applying a cancel marker. Cancel needs the real
+// pids even after it has marked the job.
+export function readJobFileRaw(jobFile) {
+  return JSON.parse(fs.readFileSync(jobFile, "utf8"));
 }
 
 export function readJobFile(jobFile) {

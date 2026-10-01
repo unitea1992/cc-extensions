@@ -158,3 +158,44 @@ test("readers show a marked job as cancelled even if an older index copy says ru
   assert.equal(loadState(workspace).jobs[0].status, "cancelled");
   assert.equal(readJobFile(resolveJobFile(workspace, "task-a")).status, "cancelled");
 });
+
+test("the state lock is reclaimed from a dead owner but never taken from a live one", async () => {
+  const { withStateLock } = await import("../plugins/opencode/scripts/lib/state.mjs");
+  const { spawnSync } = await import("node:child_process");
+  const workspace = makeTempDir();
+  const lockFile = path.join(resolveStateDir(workspace), "state.lock");
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+
+  // A pid that has certainly exited.
+  const deadPid = spawnSync(process.execPath, ["-e", "process.exit(0)"]).pid;
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: deadPid, token: "dead" }));
+  assert.equal(withStateLock(workspace, () => "ran"), "ran");
+  assert.equal(fs.existsSync(lockFile), false);
+
+  // A live owner (this process, other token) keeps its lock: a second process keeps waiting and is
+  // killed by the timeout without ever entering the critical section.
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, token: "someone-else" }));
+  const waiter = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `const { withStateLock } = await import(${JSON.stringify(new URL("../plugins/opencode/scripts/lib/state.mjs", import.meta.url).href)});
+       withStateLock(${JSON.stringify(workspace)}, () => console.log("acquired"));`
+    ],
+    { encoding: "utf8", timeout: 1000 }
+  );
+  assert.equal(waiter.stdout.trim(), "");
+  assert.equal(JSON.parse(fs.readFileSync(lockFile, "utf8")).token, "someone-else");
+  fs.rmSync(lockFile);
+});
+
+test("readJobFileRaw keeps the real pids of a cancel-marked job for the cancel path", async () => {
+  const { markJobCancelled, readJobFileRaw, writeJobFile } = await import("../plugins/opencode/scripts/lib/state.mjs");
+  const workspace = makeTempDir();
+  writeJobFile(workspace, "task-p", { id: "task-p", status: "running", pid: 11, runnerPid: 12 });
+  markJobCancelled(workspace, "task-p");
+  const raw = readJobFileRaw(resolveJobFile(workspace, "task-p"));
+  assert.equal(raw.pid, 11);
+  assert.equal(raw.runnerPid, 12);
+});

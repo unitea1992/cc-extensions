@@ -490,12 +490,6 @@ export async function runOpencodeTurn(cwd, options = {}) {
     windowsHide: true
   });
 
-  if (child.pid) {
-    emitProgress(options.onProgress, `OpenCode process started (pid ${child.pid}).`, "starting", {
-      runnerPid: child.pid
-    });
-  }
-
   // The child runs in its own process group, so signals sent to this process do not reach it.
   // Forward termination explicitly so an interrupted companion never leaves OpenCode running.
   // Signal the whole group even if the runner itself already exited: tools it started
@@ -523,6 +517,12 @@ export async function runOpencodeTurn(cwd, options = {}) {
   process.on("exit", stopChild);
   for (const signal of forwardedSignals) {
     process.on(signal, onSignal);
+  }
+
+  if (child.pid) {
+    emitProgress(options.onProgress, `OpenCode process started (pid ${child.pid}).`, "starting", {
+      runnerPid: child.pid
+    });
   }
 
   let stderr = "";

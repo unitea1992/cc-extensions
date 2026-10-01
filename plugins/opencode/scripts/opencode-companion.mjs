@@ -31,6 +31,8 @@ import {
   getConfig,
   listJobs,
   markJobCancelled,
+  readJobFileRaw,
+  resolveJobFile,
   setConfig,
   upsertJob,
   writeJobFile
@@ -894,7 +896,8 @@ async function handleCancel(argv) {
   // Mark first, then read the pids: a worker that starts concurrently either publishes its pid
   // before this read (and is killed below) or sees the marker and stops itself.
   markJobCancelled(workspaceRoot, resolvedJob.id);
-  const existing = readStoredJob(workspaceRoot, resolvedJob.id) ?? {};
+  const jobFile = resolveJobFile(workspaceRoot, resolvedJob.id);
+  const existing = fs.existsSync(jobFile) ? readJobFileRaw(jobFile) : {};
   const job = { ...resolvedJob, pid: existing.pid ?? resolvedJob.pid ?? null };
   const runnerPid = existing.runnerPid ?? job.runnerPid ?? null;
 
