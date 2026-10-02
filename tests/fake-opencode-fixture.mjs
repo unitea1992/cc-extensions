@@ -308,11 +308,9 @@ if (argv[0] === "--version" || argv[0] === "-v") {
   state.modelCalls += 1;
   saveState(state);
   if (BEHAVIOR !== "no-models" && !(BEHAVIOR === "cold-models" && state.modelCalls === 1)) {
-    // Like OpenCode v2.0.21, "config-models" leaves providers defined in config files out of \`models\`.
-    const listed = BEHAVIOR === "config-models" ? MODELS.filter((model) => !model.startsWith("local/")) : MODELS;
-    process.stdout.write(listed.join("\\n") + "\\n");
+    process.stdout.write(MODELS.join("\\n") + "\\n");
   }
-} else if (argv[0] === "debug" && argv[1] === "config" && BEHAVIOR === "config-models") {
+} else if (argv[0] === "debug" && argv[1] === "config" && BEHAVIOR === "default-model") {
   // Sources are listed from lowest to highest precedence, as \`opencode debug config\` does.
   const sources = [
     {
@@ -327,7 +325,7 @@ if (argv[0] === "--version" || argv[0] === "-v") {
     {
       type: "document",
       path: process.cwd() + "/opencode.json",
-      info: { model: "lan/big", provider: { lan: { models: { big: {}, qwen: {} } } } }
+      info: { model: { providerID: "lan", model: "big" }, providers: { lan: { models: { big: {} } } } }
     }
   ];
   process.stdout.write(JSON.stringify(sources, null, 2) + "\\n");

@@ -390,70 +390,42 @@ function sleepSync(ms) {
 }
 
 function configModelName(value) {
-  if (typeof value === "string") {
-    return value.trim() || null;
-  }
   if (value && typeof value === "object" && value.providerID && value.model) {
     return `${value.providerID}/${value.model}`;
   }
   return null;
 }
 
-// Reads the providers, models, and default model defined in the user's OpenCode config files.
+// Reads the default model (used when `--model` is omitted) from the user's OpenCode config files.
 // `opencode debug config` lists the config sources from lowest to highest precedence, so a later
-// default model overrides an earlier one. Any failure yields an empty result: this only adds to
-// what `opencode models` reports.
-export function readOpencodeConfigModels(cwd, options = {}) {
+// source overrides an earlier one. Any failure yields null.
+export function readOpencodeDefaultModel(cwd, options = {}) {
   const command = getOpencodeCommand(options.env);
   const result = runCommand(command, ["debug", "config"], { cwd, env: options.env });
-  const empty = { models: [], defaultModel: null };
   if (result.error || result.status !== 0) {
-    return empty;
+    return null;
   }
   let sources;
   try {
     sources = JSON.parse(result.stdout);
   } catch {
-    return empty;
+    return null;
   }
   if (!Array.isArray(sources)) {
-    return empty;
+    return null;
   }
-  const models = [];
   let defaultModel = null;
   for (const source of sources) {
-    const info = source?.info;
-    if (!info || typeof info !== "object") {
-      continue;
-    }
-    // OpenCode v2 uses `providers`; v1-style config files used `provider`.
-    for (const providers of [info.providers, info.provider]) {
-      if (!providers || typeof providers !== "object") {
-        continue;
-      }
-      for (const [providerId, provider] of Object.entries(providers)) {
-        for (const modelId of Object.keys(provider?.models ?? {})) {
-          const name = `${providerId}/${modelId}`;
-          if (!models.includes(name)) {
-            models.push(name);
-          }
-        }
-      }
-    }
-    defaultModel = configModelName(info.model) ?? defaultModel;
+    defaultModel = configModelName(source?.info?.model) ?? defaultModel;
   }
-  return { models, defaultModel };
+  return defaultModel;
 }
 
 // `opencode models` against a cold server can return an empty list while the model catalog
 // is still loading, so retry briefly before reporting that no models are available.
-// Some OpenCode versions leave providers defined in the config files out of `opencode models`,
-// so models from the config are appended when they are missing.
 export function listOpencodeModels(cwd, options = {}) {
   const command = getOpencodeCommand(options.env);
   const attempts = Math.max(1, options.attempts ?? 3);
-  const config = readOpencodeConfigModels(cwd, options);
-  const withConfigModels = (models) => [...models, ...config.models.filter((model) => !models.includes(model))];
   let lastDetail = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const result = runCommand(command, ["models"], { cwd, env: options.env });
@@ -465,7 +437,7 @@ export function listOpencodeModels(cwd, options = {}) {
         .map((line) => line.trim())
         .filter(Boolean);
       if (models.length > 0) {
-        return { models: withConfigModels(models), defaultModel: config.defaultModel, detail: null };
+        return { models, detail: null };
       }
       lastDetail = null;
     }
@@ -473,7 +445,7 @@ export function listOpencodeModels(cwd, options = {}) {
       sleepSync(options.retryDelayMs ?? 1500);
     }
   }
-  return { models: withConfigModels([]), defaultModel: config.defaultModel, detail: lastDetail };
+  return { models: [], detail: lastDetail };
 }
 
 export function buildModelArgument(model, effort) {
