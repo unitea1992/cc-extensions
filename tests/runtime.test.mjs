@@ -59,7 +59,31 @@ test("setup reports ready and lists models when fake opencode is installed", () 
   assert.equal(payload.ready, true);
   assert.match(payload.opencode.detail, /non-interactive runtime available/);
   assert.deepEqual(payload.models.available, FAKE_MODELS);
+  assert.equal(payload.models.defaultModel, null);
   assert.equal(payload.sessionRuntime.mode, "standalone");
+
+  const rendered = run("node", [SCRIPT, "setup"], { cwd: ROOT, env: buildEnv(binDir) });
+  assert.match(rendered.stdout, /Default model \(used when `--model` is omitted\): not set/);
+});
+
+test("setup shows the default model from the OpenCode config files", () => {
+  const binDir = makeTempDir();
+  installFakeOpencode(binDir, "default-model");
+
+  const result = run("node", [SCRIPT, "setup", "--json"], {
+    cwd: ROOT,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ready, true);
+  assert.deepEqual(payload.models.available, FAKE_MODELS);
+  assert.equal(payload.models.defaultModel, "lan/big");
+
+  const rendered = run("node", [SCRIPT, "setup"], { cwd: ROOT, env: buildEnv(binDir) });
+  assert.match(rendered.stdout, /Default model \(used when `--model` is omitted\): lan\/big/);
+  assert.doesNotMatch(rendered.stdout, /\*\*\*/);
 });
 
 test("setup is ready without npm when OpenCode is already installed", () => {

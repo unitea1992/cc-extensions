@@ -389,6 +389,38 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function configModelName(value) {
+  if (value && typeof value === "object" && value.providerID && value.model) {
+    return `${value.providerID}/${value.model}`;
+  }
+  return null;
+}
+
+// Reads the default model (used when `--model` is omitted) from the user's OpenCode config files.
+// `opencode debug config` lists the config sources from lowest to highest precedence, so a later
+// source overrides an earlier one. Any failure yields null.
+export function readOpencodeDefaultModel(cwd, options = {}) {
+  const command = getOpencodeCommand(options.env);
+  const result = runCommand(command, ["debug", "config"], { cwd, env: options.env });
+  if (result.error || result.status !== 0) {
+    return null;
+  }
+  let sources;
+  try {
+    sources = JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(sources)) {
+    return null;
+  }
+  let defaultModel = null;
+  for (const source of sources) {
+    defaultModel = configModelName(source?.info?.model) ?? defaultModel;
+  }
+  return defaultModel;
+}
+
 // `opencode models` against a cold server can return an empty list while the model catalog
 // is still loading, so retry briefly before reporting that no models are available.
 export function listOpencodeModels(cwd, options = {}) {

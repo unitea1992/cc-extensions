@@ -18,6 +18,7 @@ import {
   getOpencodeAvailability,
   getSessionRuntimeStatus,
   listOpencodeModels,
+  readOpencodeDefaultModel,
   parseStructuredOutput,
   readOutputSchema,
   runOpencodeTurn
@@ -181,10 +182,12 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   const nodeStatus = binaryAvailable("node", ["--version"], { cwd });
   const opencodeStatus = getOpencodeAvailability(cwd);
   const modelList = opencodeStatus.available ? listOpencodeModels(cwd) : { models: [], detail: null };
+  const defaultModel = opencodeStatus.available ? readOpencodeDefaultModel(cwd) : null;
   const config = getConfig(workspaceRoot);
 
   const models = {
     available: modelList.models,
+    defaultModel,
     detail: !opencodeStatus.available
       ? "skipped (OpenCode unavailable)"
       : modelList.models.length > 0

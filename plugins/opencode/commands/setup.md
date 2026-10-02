@@ -34,7 +34,7 @@ If OpenCode is already installed:
 - Do not ask about installation.
 
 Output rules:
-- Present the final setup output to the user, including the list of available models.
+- Present the final setup output to the user, including the default model (used when `--model` is omitted) and the list of available models.
 - If installation was skipped, present the original setup output.
 - If OpenCode is installed but reports no models, preserve the guidance to run `!opencode auth login` or to add a provider (including local models) to the OpenCode config.
 - Never edit the user's OpenCode config files yourself.
