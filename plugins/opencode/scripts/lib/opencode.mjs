@@ -668,6 +668,16 @@ function extractJsonCandidates(rawOutput) {
   return candidates;
 }
 
+// Some models echo the schema's `$schema` URI back as a top-level key when given the schema in the
+// prompt. It carries no review content, so drop it instead of reporting a schema mismatch.
+function stripEchoedSchemaKey(parsed, schema) {
+  if (!typeMatches(parsed, "object") || !("$schema" in parsed) || "$schema" in (schema?.properties ?? {})) {
+    return parsed;
+  }
+  const { $schema: _ignored, ...rest } = parsed;
+  return rest;
+}
+
 // OpenCode has no output-schema enforcement, so models may wrap the JSON in prose or fences.
 // With `fallback.schema`, a candidate that satisfies the schema wins over one that only parses.
 export function parseStructuredOutput(rawOutput, fallback = {}) {
@@ -691,6 +701,9 @@ export function parseStructuredOutput(rawOutput, fallback = {}) {
     } catch (error) {
       firstError ??= error;
       continue;
+    }
+    if (schema) {
+      parsed = stripEchoedSchemaKey(parsed, schema);
     }
     const schemaErrors = schema ? validateAgainstSchema(parsed, schema) : [];
     if (schemaErrors.length === 0) {
