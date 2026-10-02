@@ -191,6 +191,15 @@ export function renderSetupReport(report) {
     ""
   ];
 
+  if (report.opencode.available) {
+    lines.push(
+      report.models.defaultModel
+        ? `Default model (used when \`--model\` is omitted): ${report.models.defaultModel}`
+        : "Default model (used when `--model` is omitted): not set in the OpenCode config; OpenCode chooses one",
+      ""
+    );
+  }
+
   if (report.models.available.length > 0) {
     lines.push("Available models (pass one with `--model provider/model`):");
     for (const model of report.models.available) {

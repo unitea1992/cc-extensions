@@ -308,8 +308,29 @@ if (argv[0] === "--version" || argv[0] === "-v") {
   state.modelCalls += 1;
   saveState(state);
   if (BEHAVIOR !== "no-models" && !(BEHAVIOR === "cold-models" && state.modelCalls === 1)) {
-    process.stdout.write(MODELS.join("\\n") + "\\n");
+    // Like OpenCode v2.0.21, "config-models" leaves providers defined in config files out of \`models\`.
+    const listed = BEHAVIOR === "config-models" ? MODELS.filter((model) => !model.startsWith("local/")) : MODELS;
+    process.stdout.write(listed.join("\\n") + "\\n");
   }
+} else if (argv[0] === "debug" && argv[1] === "config" && BEHAVIOR === "config-models") {
+  // Sources are listed from lowest to highest precedence, as \`opencode debug config\` does.
+  const sources = [
+    {
+      type: "document",
+      path: "/home/user/.config/opencode/opencode.json",
+      info: {
+        model: { providerID: "local", model: "qwen" },
+        providers: { local: { name: "Local", package: "aisdk:@ai-sdk/openai-compatible", settings: { apiKey: "***" }, models: { qwen: {} } } }
+      }
+    },
+    { type: "directory", path: "/home/user/.config/opencode" },
+    {
+      type: "document",
+      path: process.cwd() + "/opencode.json",
+      info: { model: "lan/big", provider: { lan: { models: { big: {}, qwen: {} } } } }
+    }
+  ];
+  process.stdout.write(JSON.stringify(sources, null, 2) + "\\n");
 } else if (argv[0] === "session" && argv[1] === "list") {
   const state = loadState();
   const sessions = [...state.sessions]

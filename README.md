@@ -48,7 +48,8 @@ Claude Code でマーケットプレイスを追加します。
 /opencode:setup
 ```
 
-`/opencode:setup` は OpenCode が使えるかどうかと、利用できるモデルの一覧を表示します。
+`/opencode:setup` は OpenCode が使えるかどうか、利用できるモデルの一覧、`--model` を省略したときに使うモデル（OpenCode 設定の `model`）を表示します。
+OpenCode 設定に追加したローカルモデルも一覧に含まれます。
 OpenCode が見つからない場合は、その場でインストールするか確認します。
 自分で入れる場合は次のコマンドを使います。
 
