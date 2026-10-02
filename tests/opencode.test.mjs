@@ -199,6 +199,19 @@ test("schema validation reports review-output.schema.json violations", () => {
   }
 });
 
+test("structured output drops a $schema key the model echoed back", () => {
+  const review = { verdict: "approve", summary: "Looks fine.", findings: [], next_steps: [] };
+  const echoed = JSON.stringify({ $schema: "https://json-schema.org/draft/2020-12/schema", ...review });
+
+  const result = parseStructuredOutput(echoed, { schema: REVIEW_SCHEMA });
+
+  assert.deepEqual(result.schemaErrors, []);
+  assert.deepEqual(result.parsed, review);
+  assert.equal(result.rawOutput, echoed);
+  // Without a schema there is nothing to reconcile against, so the payload is left as returned.
+  assert.equal(parseStructuredOutput(echoed).parsed.$schema, "https://json-schema.org/draft/2020-12/schema");
+});
+
 test("review rendering lists schema warnings without hiding the findings", () => {
   const output = renderReviewResult(
     {
