@@ -112,7 +112,7 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(rescue, /run the `opencode:opencode-rescue` subagent in the background/i);
   assert.match(rescue, /default to foreground/i);
   assert.match(rescue, /Do not forward them to `task`/i);
-  assert.match(rescue, /`--model` and `--effort` are runtime-selection flags/i);
+  assert.match(rescue, /`--model`, `--effort`, and `--idle-timeout` are runtime-selection flags/i);
   assert.match(rescue, /Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort/i);
   assert.match(rescue, /OpenCode models use the `provider\/model` form/i);
   assert.doesNotMatch(rescue, /spark/i);

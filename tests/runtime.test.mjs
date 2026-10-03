@@ -569,6 +569,85 @@ test("task forwards model selection and effort as an OpenCode model variant", ()
   assert.equal(fakeState.lastRun.model, "fake/alpha#low");
 });
 
+test("task stops a silent OpenCode run after the idle timeout and reports why", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeOpencode(binDir, "silent-hang");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const started = Date.now();
+  const result = run("node", [SCRIPT, "task", "--model", "fake/alpha", "--idle-timeout", "1", "diagnose the failing test"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.ok(Date.now() - started < 20000, "the run should stop long before the fake gives up");
+  assert.match(result.stdout, /no output for 1s/);
+  assert.match(result.stdout, /fake\/alpha is loaded/);
+  const fakeState = readFakeState(binDir);
+  assert.throws(() => process.kill(fakeState.lastRun.pid, 0));
+  const state = readStateSnapshot(resolveStateDir(repo));
+  assert.equal(state.jobs[0].status, "failed");
+});
+
+test("task retries when OpenCode's private server hangs before starting", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeOpencode(binDir, "stuck-server-once");
+  initGitRepo(repo);
+
+  const result = run("node", [SCRIPT, "task", "diagnose the failing test"], {
+    cwd: repo,
+    env: buildEnv(binDir, { OPENCODE_COMPANION_STARTUP_TIMEOUT_SECONDS: "1" })
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Handled the requested task/);
+  assert.match(result.stderr, /did not start within 1s; retrying \(attempt 2 of 3\)/);
+  assert.equal(readFakeState(binDir).attempts, 2);
+});
+
+test("task gives up after repeated private server startup hangs", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeOpencode(binDir, "stuck-server");
+  initGitRepo(repo);
+
+  const result = run("node", [SCRIPT, "task", "diagnose the failing test"], {
+    cwd: repo,
+    env: buildEnv(binDir, { OPENCODE_COMPANION_STARTUP_TIMEOUT_SECONDS: "0.5" })
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /did not start within 1s in 3 attempts/);
+  assert.equal(readFakeState(binDir).attempts, 3);
+});
+
+test("task reads the idle timeout from the environment and rejects invalid values", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeOpencode(binDir, "silent-hang");
+  initGitRepo(repo);
+
+  const viaEnv = run("node", [SCRIPT, "task", "diagnose"], {
+    cwd: repo,
+    env: buildEnv(binDir, { OPENCODE_COMPANION_IDLE_TIMEOUT_SECONDS: "1" })
+  });
+  assert.notEqual(viaEnv.status, 0);
+  assert.match(viaEnv.stdout, /no output for 1s/);
+
+  const invalid = run("node", [SCRIPT, "task", "--idle-timeout", "soon", "diagnose"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /must be a number of seconds/);
+});
+
 test("task logs reasoning and assistant messages to the job log", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

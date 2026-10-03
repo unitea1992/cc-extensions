@@ -23,7 +23,7 @@ Claude は Claude Code で、GPT は Codex で使い、ローカルモデルを�
 ### 必要なもの
 
 - **OpenCode v2**（`opencode run --standalone --format json` が使えるバージョン。
-  v2.0.20 で動作確認）
+  v2.0.22 で動作確認）
 - OpenCode で使えるモデル（`opencode auth login` で接続したプロバイダ、または OpenCode 設定に追加したローカルモデル）
 - **Node.js 18.18 以上**
 
@@ -117,6 +117,9 @@ curl -fsSL https://opencode.ai/install | bash
 - `--effort <variant>`：モデルの variant（`provider/model#variant` の `#` 以降）を選びます。
   variant はモデルごとに決まるので、`--model` と一緒に指定します。
   名前はモデルによって異なります（例：`low`、`medium`、`high`）。
+- `--idle-timeout <秒>`：OpenCode から何も出力されないまま、この時間が過ぎたら実行を止めて失敗として返します。
+  既定は600秒（10分）で、`0` で無効になります。
+  環境変数 `OPENCODE_COMPANION_IDLE_TIMEOUT_SECONDS` でも指定できます。
 
 前回の作業を OpenCode 側の画面で続けたいときは、結果に表示される `opencode --session <id>` を使います。
 
@@ -163,10 +166,61 @@ OpenCode の導入状態と利用できるモデルを確認します。
 問題が見つかれば応答の終了を止め、先に直すよう Claude に伝えます。
 修正とレビューの往復が長引くと利用量が増えるので、様子を見られるときだけ有効にしてください。
 
+### ほかの Claude Code セッションから作業を渡す
+
+作業を割り振る側の Claude Code セッションが OpenCode に作業を渡して結果を受け取るときは、サブエージェントを通さず companion スクリプトを直接呼びます。
+ローカルモデルの作業は10分を超えることがあり、Bash ツールの待ち時間の上限に収まらないので、バックグラウンドで実行して完了を待ちます。
+
+導入済みのプラグインの場所を変数に入れておきます。
+プラグインの中から呼ぶときは `${CLAUDE_PLUGIN_ROOT}/scripts/opencode-companion.mjs` を使います。
+
+```bash
+OC=$(ls ~/.claude/plugins/cache/cc-extensions/opencode/*/scripts/opencode-companion.mjs | tail -n 1)
+```
+
+1. 指示文をファイルに書き、作業するリポジトリ（worktree でもよい）の中でジョブを始めます。
+   `--json` を付けると `jobId` が返ります。
+
+   ```bash
+   node "$OC" task --background --write --model ollama/qwen3 --prompt-file /path/to/prompt.md --json
+   ```
+
+2. 完了を待ちます。
+   `--timeout-ms` の間に終わらなければ `waitTimedOut: true` が返るので、同じコマンドをもう一度実行します。
+
+   ```bash
+   node "$OC" status <jobId> --wait --timeout-ms 540000 --json
+   ```
+
+   `job.status` が `completed` なら成功、`failed` なら失敗です。
+
+3. 結果を受け取ります。
+   OpenCode の最終応答がそのまま表示されます。
+
+   ```bash
+   node "$OC" result <jobId>
+   ```
+
+途中でやめるときは `node "$OC" cancel <jobId>` を使います。
+`--write` を付けなければ読み取り専用で実行します。
+指示文は標準入力で OpenCode に渡すので、長さの上限はありません。
+
+ローカルモデルを使うときは、次の2点に注意してください。
+
+- ローカルの OpenAI 互換サーバーには、`--model` で指定した名前に関係なく、その時点でロードされているモデルが応答するものがあります。
+  指定したモデルで動かしたいときは、先にサーバー側でそのモデルをロードしておきます。
+- モデルが読み込み中などで応答しないと、OpenCode は何も出力しないまま待ち続けます。
+  プラグインは `--idle-timeout`（既定10分）で実行を止め、モデルが応答できるか確かめるよう促すメッセージを付けて失敗として返します。
+
 ### 実行のしかた
 
 OpenCode はジョブごとに `opencode run --standalone` で起動し、専用のサーバーを立てて、終わったら止めます。
 常駐するプロセスは残りません。
+常駐サービス（`opencode serve --service`）を使わないので、サービスを起動したあとに OpenCode の設定を変えても、古い設定のまま動くことはありません。
+
+この専用サーバーは、まれに起動の途中で止まり、モデルへのリクエストを送らないまま待ち続けることがあります（OpenCode v2.0.22 で、30回あまりの実行のうち1回）。
+そこで `--print-logs` でサーバーのログを受け取り、45秒たってもサーバーが1行もログを出さなければ止めて、最大3回まで起動し直します。
+この時点では指示文がまだ処理されていないので、やり直しても同じ作業が二重に行われることはありません。
 プロンプトは標準入力で渡すので、大きな差分でもコマンド引数の長さの上限に引っかかりません。
 
 レビュー、停止時レビュー、読み取り専用を指定した作業は、ファイルを変更できない状態で実行します。

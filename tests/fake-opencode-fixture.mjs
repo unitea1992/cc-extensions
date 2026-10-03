@@ -85,7 +85,7 @@ function parseRunArgs(argv) {
   const options = { flags: [], message: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (["--agent", "--model", "-m", "--session", "-s", "--title", "--format", "--file", "-f"].includes(arg)) {
+    if (["--agent", "--model", "-m", "--session", "-s", "--title", "--format", "--file", "-f", "--log-level"].includes(arg)) {
       options[arg.replace(/^-+/, "")] = argv[i + 1];
       i += 1;
     } else if (arg.startsWith("--")) {
@@ -209,6 +209,16 @@ async function handleRun(argv) {
   const stdinPrompt = await readStdin();
   const state = loadState();
   const options = parseRunArgs(argv);
+  state.attempts = (state.attempts ?? 0) + 1;
+  saveState(state);
+  // OpenCode's private server sometimes hangs before its first log line and never sends the prompt.
+  if (BEHAVIOR === "stuck-server" || (BEHAVIOR === "stuck-server-once" && state.attempts === 1)) {
+    setTimeout(() => {}, 60000);
+    return;
+  }
+  if (options.flags.includes("--print-logs")) {
+    process.stderr.write('timestamp=2026-10-03T00:00:00.000Z level=INFO run=fake message="cli starting" role=server\\n');
+  }
   const prompt = [options.message.join(" "), stdinPrompt].filter(Boolean).join("\\n");
   const cwd = process.cwd();
 
@@ -253,6 +263,11 @@ async function handleRun(argv) {
   if (BEHAVIOR === "run-error") {
     emit("error", sessionID, { error: { name: "ProviderAuthError", message: "Provider rejected the request: invalid API key." } });
     process.exit(1);
+  }
+  if (BEHAVIOR === "silent-hang") {
+    // A model that accepts the request but never answers: OpenCode stays alive with no output.
+    setTimeout(() => {}, 60000);
+    return;
   }
   if (BEHAVIOR === "crash") {
     process.stderr.write("fatal: fake opencode crashed\\n");

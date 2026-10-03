@@ -94,13 +94,16 @@ test("run args use a private server, JSON events, and the right agent", () => {
     "--format",
     "json",
     "--thinking",
+    "--print-logs",
+    "--log-level",
+    "info",
     "--agent",
     READ_ONLY_AGENT,
     "--title",
     "OpenCode Companion Task: x"
   ]);
   const writeArgs = buildRunArgs({ readOnly: false, model: "fake/alpha", effort: "high", resumeSessionId: "ses_1", title: "ignored" });
-  assert.deepEqual(writeArgs.slice(5), ["--agent", "build", "--model", "fake/alpha#high", "--session", "ses_1"]);
+  assert.deepEqual(writeArgs.slice(8), ["--agent", "build", "--model", "fake/alpha#high", "--session", "ses_1"]);
   assert.ok(!writeArgs.includes("--auto"));
 });
 
