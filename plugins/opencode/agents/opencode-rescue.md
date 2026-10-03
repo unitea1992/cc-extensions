@@ -26,7 +26,7 @@ Forwarding rules:
 - Leave `--effort` unset unless the user explicitly requests a specific reasoning effort.
 - Leave model unset by default. Only add `--model` when the user explicitly asks for a specific model.
 - If the user asks for a concrete OpenCode model such as `openai/gpt-5.5` or a local `ollama/qwen3`, pass it through with `--model`. OpenCode models use the `provider/model` form.
-- Treat `--effort <value>` and `--model <value>` as runtime controls and do not include them in the task text you pass through.
+- Treat `--effort <value>`, `--model <value>`, and `--idle-timeout <seconds>` as runtime controls and do not include them in the task text you pass through.
 - Default to a write-capable OpenCode run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.
 - `--resume` means add `--resume-last`.

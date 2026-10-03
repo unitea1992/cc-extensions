@@ -14,6 +14,16 @@ import { readJsonFile } from "./fs.mjs";
 import { binaryAvailable, runCommand, stopProcessGroup } from "./process.mjs";
 
 export const OPENCODE_BIN_ENV = "OPENCODE_COMPANION_BIN";
+export const IDLE_TIMEOUT_ENV = "OPENCODE_COMPANION_IDLE_TIMEOUT_SECONDS";
+// OpenCode has no timeout of its own for a model that accepts the request but never answers: the
+// run stays alive with no output indefinitely. Stop a run that has been silent this long.
+// OpenCode emits an event per finished part, so a long tool call or reasoning block can be silent
+// for minutes; keep the default generous.
+export const DEFAULT_IDLE_TIMEOUT_SECONDS = 600;
+// A healthy private server logs its first line within a second; see runAttempt.
+export const STARTUP_TIMEOUT_ENV = "OPENCODE_COMPANION_STARTUP_TIMEOUT_SECONDS";
+export const DEFAULT_STARTUP_TIMEOUT_SECONDS = 45;
+const MAX_STARTUP_ATTEMPTS = 3;
 export const READ_ONLY_AGENT = "cc-companion-readonly";
 export const WRITE_AGENT = "build";
 const TASK_THREAD_PREFIX = "OpenCode Companion Task";
@@ -471,8 +481,34 @@ export function buildModelArgument(model, effort) {
   return `${normalizedModel}#${normalizedEffort}`;
 }
 
+// Returns the idle timeout in milliseconds, or 0 when disabled. The option wins over the
+// environment variable; 0 disables the watchdog.
+export function resolveIdleTimeoutMs(value, env = process.env) {
+  const raw = value ?? env[IDLE_TIMEOUT_ENV];
+  if (raw == null || String(raw).trim() === "") {
+    return DEFAULT_IDLE_TIMEOUT_SECONDS * 1000;
+  }
+  const seconds = Number(String(raw).trim());
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    throw new Error(`Idle timeout "${raw}" must be a number of seconds (0 disables it).`);
+  }
+  return Math.round(seconds * 1000);
+}
+
+export function resolveStartupTimeoutMs(env = process.env) {
+  const seconds = Number(env[STARTUP_TIMEOUT_ENV]);
+  return Number.isFinite(seconds) && seconds >= 0 && String(env[STARTUP_TIMEOUT_ENV] ?? "").trim() !== ""
+    ? Math.round(seconds * 1000)
+    : DEFAULT_STARTUP_TIMEOUT_SECONDS * 1000;
+}
+
+function describeIdleTimeout(ms) {
+  const seconds = Math.round(ms / 1000);
+  return seconds >= 60 && seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`;
+}
+
 export function buildRunArgs(options = {}) {
-  const args = ["run", "--standalone", "--format", "json", "--thinking"];
+  const args = ["run", "--standalone", "--format", "json", "--thinking", "--print-logs", "--log-level", "info"];
   args.push("--agent", options.readOnly === false ? WRITE_AGENT : READ_ONLY_AGENT);
   const modelArgument = buildModelArgument(options.model, options.effort);
   if (modelArgument) {
@@ -486,33 +522,20 @@ export function buildRunArgs(options = {}) {
   return args;
 }
 
-export async function runOpencodeTurn(cwd, options = {}) {
-  ensureOpencodeAvailable(cwd, { env: options.env });
+// The private server `opencode run --standalone` starts occasionally hangs before writing its first
+// log line; the run then waits forever without contacting the model. `--print-logs` streams the
+// server's log lines to stderr, so the first `role=server` line (or any JSON event) proves it is up.
+const SERVER_LOG_PATTERN = /\brole=server\b/;
+const LOG_LINE_PATTERN = /^timestamp=\S+ level=(\w+)/;
+const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
 
-  const prompt = options.prompt?.trim() || options.defaultPrompt || "";
-  if (!prompt) {
-    throw new Error("A prompt is required for this OpenCode run.");
-  }
+// OpenCode log lines are kept out of the stored stderr, which is shown on failure; errors stay.
+function keepStderrLine(line) {
+  const match = LOG_LINE_PATTERN.exec(line);
+  return !match || match[1] === "ERROR";
+}
 
-  const readOnly = options.readOnly !== false;
-  const args = buildRunArgs({ ...options, readOnly });
-  const baseEnv = options.env ?? process.env;
-  const env = { ...baseEnv };
-  if (readOnly) {
-    env.OPENCODE_CONFIG_CONTENT = buildRunConfigContent(baseEnv.OPENCODE_CONFIG_CONTENT);
-    Object.assign(env, buildGitHardeningEnv(cwd, env));
-    delete env.GIT_EXTERNAL_DIFF;
-  }
-
-  const state = createRunState({ onProgress: options.onProgress, sessionId: null });
-  emitProgress(
-    options.onProgress,
-    options.resumeSessionId
-      ? `Resuming OpenCode session ${options.resumeSessionId}.`
-      : `Starting OpenCode ${readOnly ? "read-only" : "write-capable"} run.`,
-    "starting"
-  );
-
+async function runAttempt({ cwd, args, env, baseEnv, prompt, state, options, idleTimeoutMs, startupTimeoutMs }) {
   const child = spawn(getOpencodeCommand(baseEnv), args, {
     cwd,
     env,
@@ -563,8 +586,47 @@ export async function runOpencodeTurn(cwd, options = {}) {
   }
 
   let stderr = "";
+  let stderrBuffer = "";
   let buffer = "";
   const unparsedLines = [];
+
+  let started = false;
+  let startupStalled = false;
+  const startupTimer = startupTimeoutMs
+    ? setTimeout(() => {
+        startupStalled = true;
+        stopChild("SIGINT");
+      }, startupTimeoutMs)
+    : null;
+  const markStarted = () => {
+    if (!started) {
+      started = true;
+      clearTimeout(startupTimer);
+    }
+  };
+
+  let idleTimer = null;
+  let idleExpired = false;
+  let idleError = null;
+  const armIdleTimer = () => {
+    if (!idleTimeoutMs || idleExpired) {
+      return;
+    }
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      idleExpired = true;
+      const model = buildModelArgument(options.model, options.effort) ?? "the default model";
+      idleError = {
+        message:
+          `OpenCode produced no output for ${describeIdleTimeout(idleTimeoutMs)}, so the run was stopped. ` +
+          `Check that ${model} is loaded and answering requests, then retry. ` +
+          `Raise the limit with --idle-timeout <seconds> if the model is just slow.`
+      };
+      emitProgress(options.onProgress, `OpenCode idle timeout: ${idleError.message}`, "failed");
+      stopChild("SIGINT");
+    }, idleTimeoutMs);
+  };
+  armIdleTimer();
 
   const handleLine = (line) => {
     const trimmed = line.trim();
@@ -581,8 +643,20 @@ export async function runOpencodeTurn(cwd, options = {}) {
     applyRunEvent(state, event);
   };
 
+  const handleStderrLine = (rawLine) => {
+    const line = rawLine.replace(ANSI_PATTERN, "");
+    if (SERVER_LOG_PATTERN.test(line)) {
+      markStarted();
+    }
+    if (keepStderrLine(line)) {
+      stderr += `${line}\n`;
+    }
+  };
+
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk) => {
+    markStarted();
+    armIdleTimer();
     buffer += chunk;
     let newline = buffer.indexOf("\n");
     while (newline !== -1) {
@@ -593,7 +667,13 @@ export async function runOpencodeTurn(cwd, options = {}) {
   });
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => {
-    stderr += chunk;
+    stderrBuffer += chunk;
+    let newline = stderrBuffer.indexOf("\n");
+    while (newline !== -1) {
+      handleStderrLine(stderrBuffer.slice(0, newline));
+      stderrBuffer = stderrBuffer.slice(newline + 1);
+      newline = stderrBuffer.indexOf("\n");
+    }
   });
 
   // Prompts go through stdin: review diffs easily exceed command-line length limits.
@@ -604,12 +684,80 @@ export async function runOpencodeTurn(cwd, options = {}) {
     child.on("error", (error) => resolve({ code: null, signal: null, error }));
     child.on("close", (code, signal) => resolve({ code, signal, error: null }));
   });
+  clearTimeout(startupTimer);
+  clearTimeout(idleTimer);
+  if (idleError && !startupStalled) {
+    // Stopping the run makes OpenCode report its own transport error; the timeout is the cause.
+    state.error = idleError;
+  }
   process.off("exit", stopChild);
   for (const signal of forwardedSignals) {
     process.off(signal, onSignal);
   }
+  if (stderrBuffer) {
+    handleStderrLine(stderrBuffer);
+  }
   if (buffer.trim()) {
     handleLine(buffer);
+  }
+  return { exit, stderr, unparsedLines, startupStalled };
+}
+
+export async function runOpencodeTurn(cwd, options = {}) {
+  ensureOpencodeAvailable(cwd, { env: options.env });
+
+  const prompt = options.prompt?.trim() || options.defaultPrompt || "";
+  if (!prompt) {
+    throw new Error("A prompt is required for this OpenCode run.");
+  }
+
+  const readOnly = options.readOnly !== false;
+  const args = buildRunArgs({ ...options, readOnly });
+  const baseEnv = options.env ?? process.env;
+  const idleTimeoutMs = resolveIdleTimeoutMs(options.idleTimeoutSeconds, baseEnv);
+  const startupTimeoutMs = resolveStartupTimeoutMs(baseEnv);
+  const env = { ...baseEnv };
+  if (readOnly) {
+    env.OPENCODE_CONFIG_CONTENT = buildRunConfigContent(baseEnv.OPENCODE_CONFIG_CONTENT);
+    Object.assign(env, buildGitHardeningEnv(cwd, env));
+    delete env.GIT_EXTERNAL_DIFF;
+  }
+
+  const state = createRunState({ onProgress: options.onProgress, sessionId: null });
+  emitProgress(
+    options.onProgress,
+    options.resumeSessionId
+      ? `Resuming OpenCode session ${options.resumeSessionId}.`
+      : `Starting OpenCode ${readOnly ? "read-only" : "write-capable"} run.`,
+    "starting"
+  );
+
+  let exit = null;
+  let stderr = "";
+  const unparsedLines = [];
+  for (let attempt = 1; ; attempt += 1) {
+    const result = await runAttempt({ cwd, args, env, baseEnv, prompt, state, options, idleTimeoutMs, startupTimeoutMs });
+    stderr += result.stderr;
+    unparsedLines.push(...result.unparsedLines);
+    if (!result.startupStalled) {
+      exit = result.exit;
+      break;
+    }
+    // Nothing reached the private server, so no tool ran and the prompt can be sent again.
+    if (attempt >= MAX_STARTUP_ATTEMPTS) {
+      state.error = {
+        message:
+          `OpenCode's private server did not start within ${describeIdleTimeout(startupTimeoutMs)} ` +
+          `in ${MAX_STARTUP_ATTEMPTS} attempts, so the run was stopped before sending the prompt.`
+      };
+      exit = result.exit;
+      break;
+    }
+    emitProgress(
+      options.onProgress,
+      `OpenCode's private server did not start within ${describeIdleTimeout(startupTimeoutMs)}; retrying (attempt ${attempt + 1} of ${MAX_STARTUP_ATTEMPTS}).`,
+      "starting"
+    );
   }
 
   if (exit.error) {

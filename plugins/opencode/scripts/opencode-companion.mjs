@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
 import {
   buildModelArgument,
+  resolveIdleTimeoutMs,
   buildPersistentTaskThreadName,
   DEFAULT_CONTINUE_PROMPT,
   ensureOpencodeAvailable,
@@ -81,7 +82,7 @@ function printUsage() {
       "  node scripts/opencode-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  node scripts/opencode-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <provider/model>]",
       "  node scripts/opencode-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <provider/model>] [focus text]",
-      "  node scripts/opencode-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <provider/model[#variant]>] [--effort <variant>] [prompt]",
+      "  node scripts/opencode-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <provider/model[#variant]>] [--effort <variant>] [--idle-timeout <seconds>] [--prompt-file <path>] [prompt]",
       "  node scripts/opencode-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/opencode-companion.mjs result [job-id] [--json]",
       "  node scripts/opencode-companion.mjs cancel [job-id] [--json]"
@@ -436,6 +437,7 @@ async function executeTaskRun(request) {
     defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
     model: request.model,
     effort: request.effort,
+    idleTimeoutSeconds: request.idleTimeoutSeconds,
     readOnly: !request.write,
     onProgress: request.onProgress,
     title: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
@@ -548,11 +550,12 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({ cwd, model, effort, idleTimeoutSeconds, prompt, write, resumeLast, jobId }) {
   return {
     cwd,
     model,
     effort,
+    idleTimeoutSeconds,
     prompt,
     write,
     resumeLast,
@@ -686,7 +689,7 @@ async function handleReview(argv) {
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "idle-timeout"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
@@ -699,6 +702,8 @@ async function handleTask(argv) {
   const effort = normalizeReasoningEffort(options.effort);
   // Validate the model/effort combination up front so background jobs do not fail later.
   buildModelArgument(model, effort);
+  const idleTimeoutSeconds = options["idle-timeout"] ?? null;
+  resolveIdleTimeoutMs(idleTimeoutSeconds);
   const prompt = readTaskPrompt(cwd, options, positionals);
 
   const resumeLast = Boolean(options["resume-last"] || options.resume);
@@ -721,6 +726,7 @@ async function handleTask(argv) {
       cwd,
       model,
       effort,
+      idleTimeoutSeconds,
       prompt,
       write,
       resumeLast,
@@ -739,6 +745,7 @@ async function handleTask(argv) {
         cwd,
         model,
         effort,
+        idleTimeoutSeconds,
         prompt,
         write,
         resumeLast,
