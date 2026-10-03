@@ -247,6 +247,33 @@ npm test
 テストでは OpenCode を偽の実行ファイル（`tests/fake-opencode-fixture.mjs`）に置き換えます。
 偽の実行ファイルは OpenCode と同じ規則で権限を判定する（後に書いた規則が優先され、`*` はワイルドカード）ので、読み取り専用エージェントで書き込みが拒否されることを自動テストで確かめられます。
 
+### 版の管理
+
+`claude plugin update` は版が上がったときだけ、導入済みのプラグインを更新します。
+版を上げずに `plugins/opencode` を変えると、その変更は利用者に届きません。
+そのため、`plugins/opencode` を変える PR では必ず版を上げます。
+テスト、CI、このリポジトリの README だけを変える PR では上げません。
+
+版は `MAJOR.MINOR.PATCH` で、PR ごとに次の基準で上げます。
+
+| 上げる桁 | 変更の例 |
+| --- | --- |
+| PATCH | 不具合の修正、メッセージやプロンプトの調整など、使い方が変わらない変更 |
+| MINOR | コマンドやオプションの追加、既定の動作の変更など、使い方が増える・変わる変更 |
+| MAJOR | オプションの削除や出力形式の変更など、今の使い方が動かなくなる変更 |
+
+1.0.0 になるまでは、使い方が動かなくなる変更も MINOR で上げます。
+
+版を上げるときは、`package.json`、`plugin.json`、`marketplace.json` の版をまとめて書き換える次のコマンドを使います。
+
+```bash
+npm run version:bump -- minor
+```
+
+続けて [CHANGELOG.md](CHANGELOG.md) に新しい版の節を足し、変更内容を PR 番号付きで書きます。
+CI は、各ファイルの版がそろっているか、CHANGELOG に今の版の節があるか、`plugins/opencode` を変えた PR で版が上がっているかを確かめます。
+手元では `npm run version:check -- --base origin/main` で同じ確認ができます。
+
 ## ライセンス
 
 Apache License 2.0。
