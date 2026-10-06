@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { renderReviewResult, renderStoredJobResult } from "../plugins/opencode/scripts/lib/render.mjs";
+import { renderReviewResult, renderStatusReport, renderStoredJobResult } from "../plugins/opencode/scripts/lib/render.mjs";
 
 test("renderReviewResult degrades gracefully when JSON is missing required review fields", () => {
   const output = renderReviewResult(
@@ -66,4 +66,24 @@ test("cancel report tells the user when a process survived the stop", async () =
   assert.match(failed, /4242/);
   assert.doesNotMatch(failed, /^Cancelled task-1\./m);
   assert.match(renderCancelReport({ id: "task-1" }, { processesStopped: true }), /^Cancelled task-1\./m);
+});
+
+test("renderStatusReport escapes backslashes before pipes so a cell cannot break out of the table", () => {
+  const output = renderStatusReport({
+    sessionRuntime: { label: "test" },
+    config: { stopReviewGate: false },
+    running: [
+      {
+        id: "job-1",
+        kindLabel: "task",
+        status: "running",
+        summary: "ends with a backslash\\ | next"
+      }
+    ],
+    latestFinished: null,
+    recent: [],
+    needsReview: false
+  });
+
+  assert.match(output, /ends with a backslash\\\\ \\\| next/);
 });
