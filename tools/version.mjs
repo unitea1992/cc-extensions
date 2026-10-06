@@ -114,7 +114,7 @@ export function changelogHasVersion(root, version) {
   if (!fs.existsSync(file)) {
     return false;
   }
-  const heading = new RegExp(`^## ${version.replace(/\./g, "\\.")}(\\s|$)`, "m");
+  const heading = new RegExp(`^## ${version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s|$)`, "m");
   return heading.test(fs.readFileSync(file, "utf8"));
 }
 
