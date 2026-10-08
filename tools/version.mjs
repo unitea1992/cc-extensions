@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Keeps the plugin version in one place of truth across the files that carry it, and checks that a
-// change to the shipped plugin comes with a version bump. `claude plugin update` only refreshes an
+// Keeps the version in one place of truth across the files that carry it, and checks that a change
+// to a shipped plugin comes with a version bump. Every plugin in this marketplace shares one version. `claude plugin update` only refreshes an
 // installed plugin when its version changes, so an unbumped change never reaches users.
 //
 //   node tools/version.mjs bump <patch|minor|major>
@@ -13,8 +13,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const PLUGIN_NAME = "opencode";
-const PLUGIN_DIR = "plugins/opencode";
+const PLUGINS = [
+  { name: "opencode", dir: "plugins/opencode" },
+  { name: "typescript7-lsp", dir: "plugins/typescript7-lsp" }
+];
 const CHANGELOG = "CHANGELOG.md";
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 
@@ -28,13 +30,6 @@ const VERSION_FIELDS = [
     }
   },
   {
-    file: `${PLUGIN_DIR}/.claude-plugin/plugin.json`,
-    get: (json) => json.version,
-    set: (json, version) => {
-      json.version = version;
-    }
-  },
-  {
     file: ".claude-plugin/marketplace.json",
     label: "metadata.version",
     get: (json) => json.metadata?.version,
@@ -42,14 +37,23 @@ const VERSION_FIELDS = [
       json.metadata.version = version;
     }
   },
-  {
-    file: ".claude-plugin/marketplace.json",
-    label: `plugins[${PLUGIN_NAME}].version`,
-    get: (json) => json.plugins?.find((plugin) => plugin.name === PLUGIN_NAME)?.version,
-    set: (json, version) => {
-      json.plugins.find((plugin) => plugin.name === PLUGIN_NAME).version = version;
+  ...PLUGINS.flatMap((plugin) => [
+    {
+      file: `${plugin.dir}/.claude-plugin/plugin.json`,
+      get: (json) => json.version,
+      set: (json, version) => {
+        json.version = version;
+      }
+    },
+    {
+      file: ".claude-plugin/marketplace.json",
+      label: `plugins[${plugin.name}].version`,
+      get: (json) => json.plugins?.find((entry) => entry.name === plugin.name)?.version,
+      set: (json, version) => {
+        json.plugins.find((entry) => entry.name === plugin.name).version = version;
+      }
     }
-  }
+  ])
 ];
 
 export function parseVersion(version) {
@@ -122,18 +126,20 @@ function git(root, args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
-// A change under the plugin directory is what users receive, so it needs a higher version than the
+// A change under a plugin directory is what users receive, so it needs a higher version than the
 // base. Changes elsewhere (tests, CI, the repository README) do not reach installed plugins.
 export function checkAgainstBase(root, base) {
-  const changed = git(root, ["diff", "--name-only", `${base}...HEAD`, "--", PLUGIN_DIR])
+  const changed = git(root, ["diff", "--name-only", `${base}...HEAD`, "--", ...PLUGINS.map((plugin) => plugin.dir)])
     .split("\n")
     .filter(Boolean);
   const current = currentVersion(root);
-  const baseVersion = JSON.parse(git(root, ["show", `${base}:${PLUGIN_DIR}/.claude-plugin/plugin.json`])).version;
+  // The version is shared, so the first plugin that already existed on the base stands for all.
+  const baseVersion = JSON.parse(git(root, ["show", `${base}:${PLUGINS[0].dir}/.claude-plugin/plugin.json`])).version;
   const errors = [];
   if (changed.length > 0 && compareVersions(current, baseVersion) <= 0) {
+    const dirs = PLUGINS.filter((plugin) => changed.some((file) => file.startsWith(`${plugin.dir}/`))).map((plugin) => plugin.dir);
     errors.push(
-      `${PLUGIN_DIR} changed (${changed.length} file${changed.length === 1 ? "" : "s"}) but the version is still ${current}. ` +
+      `${dirs.join(", ")} changed (${changed.length} file${changed.length === 1 ? "" : "s"}) but the version is still ${current}. ` +
         "Run `npm run version:bump -- <patch|minor|major>` and add a CHANGELOG entry."
     );
   }

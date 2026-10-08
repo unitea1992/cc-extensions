@@ -30,6 +30,6 @@ jobs:
       - name: Run test suite
         run: npm test
 
-      # A change under plugins/opencode must raise the version, or `claude plugin update` skips it.
+      # A change under plugins/ must raise the version, or `claude plugin update` skips it.
       - name: Check plugin version
         run: npm run version:check -- ${{ github.event_name == 'pull_request' && format('--base origin/{0}', github.base_ref) || '' }}

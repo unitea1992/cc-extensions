@@ -231,7 +231,7 @@ test("README documents the marketplace install flow and the Apache-2.0 notice", 
   }
 
   assert.equal(marketplace.name, "cc-extensions");
-  assert.deepEqual(marketplace.plugins.map((plugin) => plugin.name), ["opencode"]);
+  assert.deepEqual(marketplace.plugins.map((plugin) => plugin.name), ["opencode", "typescript7-lsp"]);
   assert.equal(marketplace.plugins[0].source, "./plugins/opencode");
   assert.equal(manifest.name, "opencode");
   assert.equal(marketplace.plugins[0].version, manifest.version);

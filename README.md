@@ -1,7 +1,10 @@
 # cc-extensions
 
 Claude Code 用のプラグインマーケットプレイスです。
-いまは `opencode` プラグインを1つ収録しています。
+次の2つのプラグインを収録しています。
+
+- `opencode`：Claude Code から OpenCode にレビューや作業を任せる
+- `typescript7-lsp`：TypeScript 7 のリポジトリで Claude Code の LSP ツールを使えるようにする
 
 ## opencode プラグイン
 
@@ -238,7 +241,73 @@ git は設定次第で textconv や外部 diff などの別プログラムを起
 スキーマに合わない箇所があれば、結果の末尾に警告として表示します。
 OpenCode の思考内容（reasoning）は全文が出力されるため、結果には末尾の一部だけを載せ、全文はジョブのログに残します。
 
-### 開発
+## typescript7-lsp プラグイン
+
+TypeScript 7 のリポジトリで、Claude Code の LSP ツール（定義へ移動、参照の検索、hover など）を使えるようにするプラグインです。
+
+標準の `typescript-lsp@claude-plugins-official` は `typescript-language-server` を起動します。
+TypeScript 7 には `tsserver.js` が無く、このサーバーは「provides no tsserver.js ... Exiting.」と出て終了します。
+その結果、TypeScript 7 のリポジトリでは LSP ツールが使えません。
+このプラグインは、TypeScript 7 自身が持つ `tsc --lsp --stdio` を起動します。
+
+### 必要なもの
+
+- **TypeScript 7 以上**（プロジェクトの `node_modules` か、PATH 上の `tsc`）
+- **Node.js 18.18 以上**（tsc を選んで起動する小さなラッパーが使います）
+
+### 導入
+
+マーケットプレイスを追加していなければ、先に追加します（手順は opencode プラグインの「導入」と同じです）。
+
+```bash
+/plugin install typescript7-lsp@cc-extensions
+/reload-plugins
+```
+
+標準の `typescript-lsp` が有効なままだと、同じ拡張子には先に登録されたほうのサーバーだけが使われ、もう一方は使われません。
+先に登録されたサーバーが起動に失敗しても、もう一方には切り替わりません。
+どちらが先になるかは読み込み順で決まるので、使わないほうを無効にしてください。
+
+- TypeScript 7 のリポジトリでは、標準のほうを無効にします。
+
+  ```bash
+  /plugin disable typescript-lsp@claude-plugins-official
+  ```
+
+- TypeScript 6 以下のリポジトリでは、このプラグインを無効にして標準を使います。
+  このプラグインは、TypeScript 7 が見つからないと起動しません。
+
+  ```bash
+  /plugin disable typescript7-lsp@cc-extensions
+  ```
+
+プラグインの有効と無効はプロジェクトごとに切り替えられます（`--scope project` や `--scope local`）。
+
+扱う拡張子は `.ts`、`.tsx`、`.mts`、`.cts`、`.js`、`.jsx`、`.mjs`、`.cjs` です。
+サーバーは、対象の拡張子のファイルを Claude Code が最初に開いたときに起動します。
+
+### どの tsc を使うか
+
+起動のたびに、次の順で TypeScript 7 以上を探します。
+
+1. 作業中のプロジェクトのディレクトリから親へたどり、最初に見つかった `node_modules/typescript`
+2. 見つからなければ、プロジェクトの下2階層まで（`apps/web`、`packages/foo` のようなモノレポ）で、最も新しい TypeScript
+3. それでも無ければ、PATH 上の `tsc`
+
+TypeScript 7 以上が見つからなければ、サーバーは起動せず、理由を標準エラーに書いて終了します。
+LSP ツールには「exit code 1 で終了した」とだけ返るので、理由は `claude --debug` のログで確認してください。
+たとえば TypeScript 6.0.3 しかなければ、「needs TypeScript 7 or later」と、見つかった版と場所が出ます。
+
+### 開発版を試す
+
+リポジトリを取得したディレクトリで、プラグインを置いたまま Claude Code を起動します。
+インストール済みの設定は変わりません。
+
+```bash
+claude --plugin-dir ./plugins/typescript7-lsp
+```
+
+## 開発
 
 ```bash
 npm test
@@ -247,12 +316,15 @@ npm test
 テストでは OpenCode を偽の実行ファイル（`tests/fake-opencode-fixture.mjs`）に置き換えます。
 偽の実行ファイルは OpenCode と同じ規則で権限を判定する（後に書いた規則が優先され、`*` はワイルドカード）ので、読み取り専用エージェントで書き込みが拒否されることを自動テストで確かめられます。
 
-### 版の管理
+## 版の管理
 
 `claude plugin update` は版が上がったときだけ、導入済みのプラグインを更新します。
-版を上げずに `plugins/opencode` を変えると、その変更は利用者に届きません。
-そのため、`plugins/opencode` を変える PR では必ず版を上げます。
+版を上げずに `plugins/` の下を変えると、その変更は利用者に届きません。
+そのため、`plugins/` の下を変える PR では必ず版を上げます。
 テスト、CI、このリポジトリの README だけを変える PR では上げません。
+
+版はこのマーケットプレイスの全プラグインでそろえて管理します。
+片方のプラグインだけを変えたときも、両方の版が一緒に上がります。
 
 版は `MAJOR.MINOR.PATCH` で、PR ごとに次の基準で上げます。
 
@@ -264,14 +336,14 @@ npm test
 
 1.0.0 になるまでは、使い方が動かなくなる変更も MINOR で上げます。
 
-版を上げるときは、`package.json`、`plugin.json`、`marketplace.json` の版をまとめて書き換える次のコマンドを使います。
+版を上げるときは、`package.json`、各プラグインの `plugin.json`、`marketplace.json` の版をまとめて書き換える次のコマンドを使います。
 
 ```bash
 npm run version:bump -- minor
 ```
 
 続けて [CHANGELOG.md](CHANGELOG.md) に新しい版の節を足し、変更内容を PR 番号付きで書きます。
-CI は、各ファイルの版がそろっているか、CHANGELOG に今の版の節があるか、`plugins/opencode` を変えた PR で版が上がっているかを確かめます。
+CI は、各ファイルの版がそろっているか、CHANGELOG に今の版の節があるか、`plugins/` の下を変えた PR で版が上がっているかを確かめます。
 手元では `npm run version:check -- --base origin/main` で同じ確認ができます。
 
 ## ライセンス
