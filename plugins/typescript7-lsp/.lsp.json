@@ -1,0 +1,16 @@
+{
+  "typescript7": {
+    "command": "node",
+    "args": ["${CLAUDE_PLUGIN_ROOT}/bin/typescript7-lsp.mjs"],
+    "extensionToLanguage": {
+      ".ts": "typescript",
+      ".tsx": "typescriptreact",
+      ".mts": "typescript",
+      ".cts": "typescript",
+      ".js": "javascript",
+      ".jsx": "javascriptreact",
+      ".mjs": "javascript",
+      ".cjs": "javascript"
+    }
+  }
+}

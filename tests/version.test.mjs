@@ -29,14 +29,18 @@ test("bump levels follow semantic versioning", () => {
   assert.ok(compareVersions("0.10.0", "0.9.9") > 0);
 });
 
+const PLUGIN_NAMES = ["opencode", "typescript7-lsp"];
+
 function writeVersions(repo, version) {
-  fs.mkdirSync(path.join(repo, "plugins", "opencode", ".claude-plugin"), { recursive: true });
   fs.mkdirSync(path.join(repo, ".claude-plugin"), { recursive: true });
   fs.writeFileSync(path.join(repo, "package.json"), JSON.stringify({ version }));
-  fs.writeFileSync(path.join(repo, "plugins", "opencode", ".claude-plugin", "plugin.json"), JSON.stringify({ version }));
+  for (const name of PLUGIN_NAMES) {
+    fs.mkdirSync(path.join(repo, "plugins", name, ".claude-plugin"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "plugins", name, ".claude-plugin", "plugin.json"), JSON.stringify({ version }));
+  }
   fs.writeFileSync(
     path.join(repo, ".claude-plugin", "marketplace.json"),
-    JSON.stringify({ metadata: { version }, plugins: [{ name: "opencode", version }] })
+    JSON.stringify({ metadata: { version }, plugins: PLUGIN_NAMES.map((name) => ({ name, version })) })
   );
 }
 
@@ -63,6 +67,23 @@ test("a plugin change without a version bump fails the base check", () => {
   assert.match(checkAgainstBase(repo, "base").errors.join("\n"), /plugins\/opencode changed .* still 0\.2\.0/);
 
   writeVersions(repo, "0.2.1");
+  commitAll(repo, "bump");
+  assert.deepEqual(checkAgainstBase(repo, "base").errors, []);
+});
+
+test("a change to any plugin without a version bump fails the base check", () => {
+  const repo = makeTempDir();
+  initGitRepo(repo);
+  writeVersions(repo, "0.2.0");
+  fs.writeFileSync(path.join(repo, "plugins", "typescript7-lsp", "wrapper.mjs"), "export const a = 1;\n");
+  commitAll(repo, "base");
+  run("git", ["branch", "base"], { cwd: repo });
+
+  fs.writeFileSync(path.join(repo, "plugins", "typescript7-lsp", "wrapper.mjs"), "export const a = 2;\n");
+  commitAll(repo, "plugin change");
+  assert.match(checkAgainstBase(repo, "base").errors.join("\n"), /plugins\/typescript7-lsp changed .* still 0\.2\.0/);
+
+  writeVersions(repo, "0.3.0");
   commitAll(repo, "bump");
   assert.deepEqual(checkAgainstBase(repo, "base").errors, []);
 });

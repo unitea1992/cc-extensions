@@ -4,18 +4,27 @@
     "name": "unitea1992"
   },
   "metadata": {
-    "description": "Claude Code plugins that extend Claude Code with other coding agents.",
-    "version": "0.2.1"
+    "description": "Claude Code plugins: OpenCode as a second coding agent, and a TypeScript language server that runs on TypeScript 7.",
+    "version": "0.3.0"
   },
   "plugins": [
     {
       "name": "opencode",
       "description": "Use OpenCode from Claude Code to review code or delegate tasks.",
-      "version": "0.2.1",
+      "version": "0.3.0",
       "author": {
         "name": "unitea1992"
       },
       "source": "./plugins/opencode"
+    },
+    {
+      "name": "typescript7-lsp",
+      "description": "TypeScript and JavaScript language server for Claude Code that works with TypeScript 7 (tsc --lsp --stdio).",
+      "version": "0.3.0",
+      "author": {
+        "name": "unitea1992"
+      },
+      "source": "./plugins/typescript7-lsp"
     }
   ]
 }
