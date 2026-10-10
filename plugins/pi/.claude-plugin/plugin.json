@@ -1,6 +1,6 @@
 {
   "name": "pi",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Use Pi (a local-model coding agent) from Claude Code to delegate investigation and implementation tasks.",
   "author": {
     "name": "unitea1992"

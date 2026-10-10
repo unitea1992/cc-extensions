@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Claude Code plugins: OpenCode and Pi as second coding agents, and a TypeScript language server that runs on TypeScript 7.",
-    "version": "0.4.0"
+    "version": "0.4.1"
   },
   "plugins": [
     {
       "name": "opencode",
       "description": "Use OpenCode from Claude Code to review code or delegate tasks.",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "author": {
         "name": "unitea1992"
       },
@@ -20,7 +20,7 @@
     {
       "name": "pi",
       "description": "Use Pi (a local-model coding agent) from Claude Code to delegate investigation and implementation tasks.",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "author": {
         "name": "unitea1992"
       },
@@ -29,7 +29,7 @@
     {
       "name": "typescript7-lsp",
       "description": "TypeScript and JavaScript language server for Claude Code that works with TypeScript 7 (tsc --lsp --stdio).",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "author": {
         "name": "unitea1992"
       },

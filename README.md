@@ -122,7 +122,7 @@ curl -fsSL https://opencode.ai/install | bash
   variant はモデルごとに決まるので、`--model` と一緒に指定します。
   名前はモデルによって異なります（例：`low`、`medium`、`high`）。
 - `--auto`：書き込みありの作業で、OpenCode の設定で明示的に `deny` されていない権限確認を自動で許可します。
-  付けなければ、作業ディレクトリの外への書き込み（別の worktree の作成、`~/.claude/state` への報告ファイルなど）は確認が必要な操作として拒否されます。
+  付けなければ、作業ディレクトリの外への書き込み（別の worktree の作成など）は確認が必要な操作として拒否されます。
   読み取り専用の実行では何も変わりません。
 - `--idle-timeout <秒>`：OpenCode から何も出力されないまま、この時間が過ぎたら実行を止めて失敗として返します。
   既定は600秒（10分）で、`0` で無効になります。
@@ -283,7 +283,7 @@ Claude Code から Pi（`pi` コマンドで動くコーディングエージェ
 ```bash
 /pi:rescue テストが落ちる原因を調べて
 /pi:rescue --background 不安定なテストを調査して
-/pi:rescue --model spark/Qwen3.8-Flash-Next --effort high 最小限の修正で直して
+/pi:rescue --model openai/gpt-5.5 --effort high 最小限の修正で直して
 /pi:rescue --resume 一番重要な修正を適用して
 ```
 
@@ -365,7 +365,12 @@ TypeScript 7 には `tsserver.js` が無く、このサーバーは「provides n
   /plugin disable typescript7-lsp@cc-extensions
   ```
 
-プラグインの有効と無効はプロジェクトごとに切り替えられます（`--scope project` や `--scope local`）。
+プロジェクトごとに切り替えたいときは、そのプロジェクトのディレクトリでターミナルから `claude plugin disable` に `--scope` を付けて実行します。
+`--scope project` はリポジトリの `.claude/settings.json` に書き、`--scope local` は自分だけの `.claude/settings.local.json` に書きます。
+
+```bash
+claude plugin disable typescript-lsp@claude-plugins-official --scope local
+```
 
 扱う拡張子は `.ts`、`.tsx`、`.mts`、`.cts`、`.js`、`.jsx`、`.mjs`、`.cjs` です。
 サーバーは、対象の拡張子のファイルを Claude Code が最初に開いたときに起動します。
@@ -391,45 +396,30 @@ LSP ツールには「exit code 1 で終了した」とだけ返るので、理�
 claude --plugin-dir ./plugins/typescript7-lsp
 ```
 
-## 開発
+## プラグインの更新
+
+新しい版が出たら、Claude Code の外のターミナルで次のコマンドを実行します。
+マーケットプレイスの最新の内容を取ってきてから、そのプラグインを更新します。
 
 ```bash
-npm test
+claude plugin update opencode@cc-extensions
 ```
 
-テストでは OpenCode を偽の実行ファイル（`tests/fake-opencode-fixture.mjs`）に置き換えます。
-偽の実行ファイルは OpenCode と同じ規則で権限を判定する（後に書いた規則が優先され、`*` はワイルドカード）ので、読み取り専用エージェントで書き込みが拒否されることを自動テストで確かめられます。
-pi プラグインの試験も、Pi を偽の実行ファイル（`tests/fake-pi-fixture.mjs`）に置き換えて動かします。
+プラグインごとに1つずつ実行します（全プラグインをまとめて更新するコマンドはありません）。
+`update` は会話中の `/plugin` からは使えません。
+会話の中で更新するときは、`/plugin` を開き、Installed タブでプラグインを選んで「Update now」を選びます。
 
-## 版の管理
+更新は、Claude Code を再起動するか `/reload-plugins` を実行すると反映されます。
 
-`claude plugin update` は版が上がったときだけ、導入済みのプラグインを更新します。
-版を上げずに `plugins/` の下を変えると、その変更は利用者に届きません。
-そのため、`plugins/` の下を変える PR では必ず版を上げます。
-テスト、CI、このリポジトリの README だけを変える PR では上げません。
-
-版はこのマーケットプレイスの全プラグインでそろえて管理します。
-片方のプラグインだけを変えたときも、両方の版が一緒に上がります。
-
-版は `MAJOR.MINOR.PATCH` で、PR ごとに次の基準で上げます。
-
-| 上げる桁 | 変更の例 |
-| --- | --- |
-| PATCH | 不具合の修正、メッセージやプロンプトの調整など、使い方が変わらない変更 |
-| MINOR | コマンドやオプションの追加、既定の動作の変更など、使い方が増える・変わる変更 |
-| MAJOR | オプションの削除や出力形式の変更など、今の使い方が動かなくなる変更 |
-
-1.0.0 になるまでは、使い方が動かなくなる変更も MINOR で上げます。
-
-版を上げるときは、`package.json`、各プラグインの `plugin.json`、`marketplace.json` の版をまとめて書き換える次のコマンドを使います。
+プロジェクト単位（`--scope project` や `--scope local`）で入れたプラグインは、そのプロジェクトのディレクトリで `--scope` を付けて更新します。
 
 ```bash
-npm run version:bump -- minor
+claude plugin update typescript7-lsp@cc-extensions --scope project
 ```
 
-続けて [CHANGELOG.md](CHANGELOG.md) に新しい版の節を足し、変更内容を PR 番号付きで書きます。
-CI は、各ファイルの版がそろっているか、CHANGELOG に今の版の節があるか、`plugins/` の下を変えた PR で版が上がっているかを確かめます。
-手元では `npm run version:check -- --base origin/main` で同じ確認ができます。
+## 開発に参加する
+
+テストの動かし方と版の上げ方は [CONTRIBUTING.md](CONTRIBUTING.md) にまとめています。
 
 ## ライセンス
 

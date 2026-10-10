@@ -128,7 +128,7 @@ function git(root, args) {
 }
 
 // A change under a plugin directory is what users receive, so it needs a higher version than the
-// base. Changes elsewhere (tests, CI, the repository README) do not reach installed plugins.
+// base. Changes elsewhere (tests, CI, repository docs such as README and CONTRIBUTING) do not reach installed plugins.
 export function checkAgainstBase(root, base) {
   const changed = git(root, ["diff", "--name-only", `${base}...HEAD`, "--", ...PLUGINS.map((plugin) => plugin.dir)])
     .split("\n")
