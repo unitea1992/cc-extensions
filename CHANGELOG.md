@@ -4,6 +4,11 @@
 プラグインの版はそろえて上げます。
 版の上げ方は [README の「版の管理」](README.md#版の管理) を参照してください。
 
+## 0.4.0
+
+- Pi を Claude Code から呼ぶ `pi` プラグインを追加した。`/pi:rescue`、`/pi:status`、`/pi:result`、`/pi:cancel`、`/pi:setup` を収録している。`pi --print --mode json` をジョブごとに起動し、書き込みあり・読み取り専用（`read,grep,find,ls` のみ）、再開、バックグラウンド実行、無出力タイムアウトに対応する。Pi には権限の仕組みがないので、作業ディレクトリの外にも書ける。
+- `opencode` の `task` と `/opencode:rescue` に `--auto` を追加した。書き込みありの作業で、OpenCode の設定が明示的に拒否していない権限確認を自動で許可する。付けなければ従来どおり、作業ディレクトリの外への書き込みは確認が必要な操作として拒否される。読み取り専用の実行では何も変わらない。
+
 ## 0.3.0
 
 - TypeScript 7 で動く TypeScript の言語サーバーを使う `typescript7-lsp` プラグインを追加した。`tsc --lsp --stdio` を起動し、ワークスペースの TypeScript 7 以上を優先して使う。標準の `typescript-lsp` が TypeScript 7 で「tsserver.js が無い」と言って終了する問題を避けられる。

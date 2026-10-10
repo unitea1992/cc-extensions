@@ -510,6 +510,11 @@ function describeIdleTimeout(ms) {
 export function buildRunArgs(options = {}) {
   const args = ["run", "--standalone", "--format", "json", "--thinking", "--print-logs", "--log-level", "info"];
   args.push("--agent", options.readOnly === false ? WRITE_AGENT : READ_ONLY_AGENT);
+  // `--auto` approves only what the user's config does not explicitly deny, so deny rules still
+  // hold. Read-only runs never get it: their agent denies everything outside reads by default.
+  if (options.readOnly === false && options.autoApprove) {
+    args.push("--auto");
+  }
   const modelArgument = buildModelArgument(options.model, options.effort);
   if (modelArgument) {
     args.push("--model", modelArgument);

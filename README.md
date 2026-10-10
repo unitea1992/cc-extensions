@@ -1,9 +1,10 @@
 # cc-extensions
 
 Claude Code 用のプラグインマーケットプレイスです。
-次の2つのプラグインを収録しています。
+次の3つのプラグインを収録しています。
 
 - `opencode`：Claude Code から OpenCode にレビューや作業を任せる
+- `pi`：Claude Code から Pi に調査や修正を任せる
 - `typescript7-lsp`：TypeScript 7 のリポジトリで Claude Code の LSP ツールを使えるようにする
 
 ## opencode プラグイン
@@ -120,6 +121,9 @@ curl -fsSL https://opencode.ai/install | bash
 - `--effort <variant>`：モデルの variant（`provider/model#variant` の `#` 以降）を選びます。
   variant はモデルごとに決まるので、`--model` と一緒に指定します。
   名前はモデルによって異なります（例：`low`、`medium`、`high`）。
+- `--auto`：書き込みありの作業で、OpenCode の設定で明示的に `deny` されていない権限確認を自動で許可します。
+  付けなければ、作業ディレクトリの外への書き込み（別の worktree の作成、`~/.claude/state` への報告ファイルなど）は確認が必要な操作として拒否されます。
+  読み取り専用の実行では何も変わりません。
 - `--idle-timeout <秒>`：OpenCode から何も出力されないまま、この時間が過ぎたら実行を止めて失敗として返します。
   既定は600秒（10分）で、`0` で無効になります。
   環境変数 `OPENCODE_COMPANION_IDLE_TIMEOUT_SECONDS` でも指定できます。
@@ -188,6 +192,8 @@ OC=$(ls ~/.claude/plugins/cache/cc-extensions/opencode/*/scripts/opencode-compan
    node "$OC" task --background --write --model ollama/qwen3 --prompt-file /path/to/prompt.md --json
    ```
 
+   作業ディレクトリの外（報告ファイルや別の worktree）にも書かせたいときは `--auto` を足します。
+
 2. 完了を待ちます。
    `--timeout-ms` の間に終わらなければ `waitTimedOut: true` が返るので、同じコマンドをもう一度実行します。
 
@@ -236,10 +242,88 @@ git は設定次第で textconv や外部 diff などの別プログラムを起
 
 書き込みありの作業では、OpenCode 組み込みの `build` エージェントを使います。
 確認が必要な操作（作業ディレクトリ外へのアクセスや `.env` の読み取りなど）は、非対話の実行なので OpenCode が自動で拒否します。
+プラグインが OpenCode の権限を書き換えることはなく、OpenCode の設定（`permission`）がそのまま効きます。
+拒否される操作をまとめて許可したいときは、設定で許可するか、`--auto` を付けます。
+`--auto` は OpenCode の `run --auto` に渡され、設定で明示的に `deny` された操作は許可されません。
 
 レビュー結果は、差分を渡して JSON で返すようモデルに求め、応答から取り出した JSON を `review-output.schema.json` で検証します。
 スキーマに合わない箇所があれば、結果の末尾に警告として表示します。
 OpenCode の思考内容（reasoning）は全文が出力されるため、結果には末尾の一部だけを載せ、全文はジョブのログに残します。
+
+## pi プラグイン
+
+Claude Code から Pi（`pi` コマンドで動くコーディングエージェント。ローカルモデルでも使える）に調査や修正を任せるプラグインです。
+`/opencode:rescue` と同じ形で、`pi:pi-rescue` サブエージェント、バックグラウンド実行、結果の受け取り、前回の作業の再開が使えます。
+レビューのコマンドはありません。
+
+### できること
+
+- `/pi:rescue`：調査や修正を Pi に任せる
+- `/pi:status`、`/pi:result`、`/pi:cancel`：バックグラウンドジョブの確認、結果の表示、中止
+- `/pi:setup`：Pi の導入状態と利用できるモデルの確認
+
+### 必要なもの
+
+- **Pi**（`pi --print --mode json` が使えるバージョン。1.1.0 で動作確認）
+- Pi で使えるモデル（`pi --list-models` に表示されるもの）
+- **Node.js 18.18 以上**
+
+### 導入
+
+マーケットプレイスを追加していなければ、先に追加します（手順は opencode プラグインの「導入」と同じです）。
+
+```bash
+/plugin install pi@cc-extensions
+/reload-plugins
+/pi:setup
+```
+
+### 使い方
+
+```bash
+/pi:rescue テストが落ちる原因を調べて
+/pi:rescue --background 不安定なテストを調査して
+/pi:rescue --model spark/Qwen3.8-Flash-Next --effort high 最小限の修正で直して
+/pi:rescue --resume 一番重要な修正を適用して
+```
+
+- `--background` / `--wait`、`--resume` / `--fresh`、`--model`、`--idle-timeout` は `/opencode:rescue` と同じ意味です。
+- `--effort <段階>`：Pi の思考の段階（`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`）を選びます。
+- 既定では書き込みありで実行します。
+  読み取り専用にしたいときは、その旨を依頼文に書いてください。
+
+他のセッションから直接呼ぶときは、opencode と同じく companion スクリプトを使います。
+
+```bash
+PI=$(ls ~/.claude/plugins/cache/cc-extensions/pi/*/scripts/pi-companion.mjs | tail -n 1)
+node "$PI" task --background --write --prompt-file /path/to/prompt.md --json
+node "$PI" status <jobId> --wait --timeout-ms 540000 --json
+node "$PI" result <jobId>
+```
+
+### 権限について
+
+Pi には承認や sandbox の仕組みがありません。
+ツールは Pi を起動したアカウントの権限でそのまま動くので、作業ディレクトリの外（報告ファイルや別の worktree）にも書けます。
+OpenCode や Codex のように、プラグインが利用者の権限設定を上書きすることはありません。
+
+読み取り専用の実行では、`--tools read,grep,find,ls` で Pi に渡すツールを絞ります。
+ファイルの書き換えやコマンドの実行（テストの実行も含む）はできません。
+この制限はツールを渡さないことによるもので、OS のサンドボックスではありません。
+
+プロジェクトのローカル設定（`.pi/` の拡張や設定）は、Pi の信頼の確認に任せます。
+プラグインは `--approve` を付けません。
+
+### 実行のしかた
+
+Pi はジョブごとに `pi --print --mode json` で起動し、終わったら止まります。
+常駐するプロセスは残りません。
+指示文は標準入力で渡すので、長さの上限はありません。
+
+新しい作業には、プラグインが ID を決めたセッション（`--session-id`）を使い、`--resume` では同じ ID を `--session` で開きます。
+前回の作業を Pi 側の画面で続けたいときは、結果に表示される `pi --session <id>` を使います。
+
+出力が `--idle-timeout`（既定600秒）の間止まったら、実行を止めて失敗として返します。
 
 ## typescript7-lsp プラグイン
 
@@ -315,6 +399,7 @@ npm test
 
 テストでは OpenCode を偽の実行ファイル（`tests/fake-opencode-fixture.mjs`）に置き換えます。
 偽の実行ファイルは OpenCode と同じ規則で権限を判定する（後に書いた規則が優先され、`*` はワイルドカード）ので、読み取り専用エージェントで書き込みが拒否されることを自動テストで確かめられます。
+pi プラグインの試験も、Pi を偽の実行ファイル（`tests/fake-pi-fixture.mjs`）に置き換えて動かします。
 
 ## 版の管理
 

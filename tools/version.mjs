@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGINS = [
   { name: "opencode", dir: "plugins/opencode" },
+  { name: "pi", dir: "plugins/pi" },
   { name: "typescript7-lsp", dir: "plugins/typescript7-lsp" }
 ];
 const CHANGELOG = "CHANGELOG.md";

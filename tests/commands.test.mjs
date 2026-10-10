@@ -112,7 +112,7 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(rescue, /run the `opencode:opencode-rescue` subagent in the background/i);
   assert.match(rescue, /default to foreground/i);
   assert.match(rescue, /Do not forward them to `task`/i);
-  assert.match(rescue, /`--model`, `--effort`, and `--idle-timeout` are runtime-selection flags/i);
+  assert.match(rescue, /`--model`, `--effort`, `--idle-timeout`, and `--auto` are runtime-selection flags/i);
   assert.match(rescue, /Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort/i);
   assert.match(rescue, /OpenCode models use the `provider\/model` form/i);
   assert.doesNotMatch(rescue, /spark/i);
@@ -231,7 +231,7 @@ test("README documents the marketplace install flow and the Apache-2.0 notice", 
   }
 
   assert.equal(marketplace.name, "cc-extensions");
-  assert.deepEqual(marketplace.plugins.map((plugin) => plugin.name), ["opencode", "typescript7-lsp"]);
+  assert.deepEqual(marketplace.plugins.map((plugin) => plugin.name), ["opencode", "pi", "typescript7-lsp"]);
   assert.equal(marketplace.plugins[0].source, "./plugins/opencode");
   assert.equal(manifest.name, "opencode");
   assert.equal(marketplace.plugins[0].version, manifest.version);
