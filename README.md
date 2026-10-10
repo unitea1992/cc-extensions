@@ -365,7 +365,12 @@ TypeScript 7 には `tsserver.js` が無く、このサーバーは「provides n
   /plugin disable typescript7-lsp@cc-extensions
   ```
 
-プラグインの有効と無効はプロジェクトごとに切り替えられます（`--scope project` や `--scope local`）。
+プロジェクトごとに切り替えたいときは、そのプロジェクトのディレクトリでターミナルから `claude plugin disable` に `--scope` を付けて実行します。
+`--scope project` はリポジトリの `.claude/settings.json` に書き、`--scope local` は自分だけの `.claude/settings.local.json` に書きます。
+
+```bash
+claude plugin disable typescript-lsp@claude-plugins-official --scope local
+```
 
 扱う拡張子は `.ts`、`.tsx`、`.mts`、`.cts`、`.js`、`.jsx`、`.mjs`、`.cjs` です。
 サーバーは、対象の拡張子のファイルを Claude Code が最初に開いたときに起動します。
@@ -391,6 +396,27 @@ LSP ツールには「exit code 1 で終了した」とだけ返るので、理�
 claude --plugin-dir ./plugins/typescript7-lsp
 ```
 
+## プラグインの更新
+
+新しい版が出たら、Claude Code の外のターミナルで次のコマンドを実行します。
+マーケットプレイスの最新の内容を取ってきてから、そのプラグインを更新します。
+
+```bash
+claude plugin update opencode@cc-extensions
+```
+
+プラグインごとに1つずつ実行します（全プラグインをまとめて更新するコマンドはありません）。
+`update` は会話中の `/plugin` からは使えません。
+会話の中で更新するときは、`/plugin` を開き、Installed タブでプラグインを選んで「Update now」を選びます。
+
+更新は、Claude Code を再起動するか `/reload-plugins` を実行すると反映されます。
+
+プロジェクト単位（`--scope project` や `--scope local`）で入れたプラグインは、そのプロジェクトのディレクトリで `--scope` を付けて更新します。
+
+```bash
+claude plugin update typescript7-lsp@cc-extensions --scope project
+```
+
 ## 開発
 
 ```bash
@@ -403,13 +429,14 @@ pi プラグインの試験も、Pi を偽の実行ファイル（`tests/fake-pi
 
 ## 版の管理
 
-`claude plugin update` は版が上がったときだけ、導入済みのプラグインを更新します。
+Claude Code は、プラグインの版が変わったときだけ導入済みのプラグインを更新します。
+版は各プラグインの `plugin.json` に書いた `version` で決まり、この文字列が変わらない限り、コミットを足しても利用者の手元は古いままです。
 版を上げずに `plugins/` の下を変えると、その変更は利用者に届きません。
 そのため、`plugins/` の下を変える PR では必ず版を上げます。
 テスト、CI、このリポジトリの README だけを変える PR では上げません。
 
 版はこのマーケットプレイスの全プラグインでそろえて管理します。
-片方のプラグインだけを変えたときも、両方の版が一緒に上がります。
+1つのプラグインだけを変えたときも、全プラグインの版が一緒に上がります。
 
 版は `MAJOR.MINOR.PATCH` で、PR ごとに次の基準で上げます。
 
