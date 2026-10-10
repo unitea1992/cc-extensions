@@ -1,9 +1,9 @@
 {
   "name": "cc-extensions",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
-  "description": "Claude Code marketplace: OpenCode companion plugin (port of openai/codex-plugin-cc).",
+  "description": "Claude Code plugin marketplace: opencode, pi, and typescript7-lsp plugins.",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=18.18.0"

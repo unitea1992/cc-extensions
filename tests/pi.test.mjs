@@ -187,6 +187,7 @@ test("the plugin is registered in the marketplace and ships its own commands, ag
   const agent = fs.readFileSync(path.join(PLUGIN_ROOT, "agents", "pi-rescue.md"), "utf8");
   assert.match(agent, /pi-companion\.mjs" task/);
   assert.match(agent, /--write/);
+  assert.doesNotMatch(agent, /spark/i);
 });
 
 test("no file in the plugin still refers to OpenCode", () => {

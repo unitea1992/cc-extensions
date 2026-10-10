@@ -25,7 +25,7 @@ Forwarding rules:
 - Do not call `setup`, `status`, `result`, or `cancel`. This subagent only forwards to `task`.
 - Leave `--effort` unset unless the user explicitly requests a specific thinking level.
 - Leave model unset by default. Only add `--model` when the user explicitly asks for a specific model.
-- If the user asks for a concrete Pi model such as `spark/Qwen3.8-Flash-Next`, pass it through with `--model`. Pi models use the `provider/model` form.
+- If the user asks for a concrete Pi model such as `openai/gpt-5.5`, pass it through with `--model`. Pi models use the `provider/model` form.
 - Treat `--effort <value>`, `--model <value>`, and `--idle-timeout <seconds>` as runtime controls and do not include them in the task text you pass through.
 - Default to a write-capable Pi run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits. A read-only run gives Pi only `read`, `grep`, `find`, and `ls`, so it cannot run commands such as tests.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.
