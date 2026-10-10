@@ -82,7 +82,7 @@ function printUsage() {
       "  node scripts/opencode-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  node scripts/opencode-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <provider/model>]",
       "  node scripts/opencode-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [--model <provider/model>] [focus text]",
-      "  node scripts/opencode-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <provider/model[#variant]>] [--effort <variant>] [--idle-timeout <seconds>] [--prompt-file <path>] [prompt]",
+      "  node scripts/opencode-companion.mjs task [--background] [--write] [--auto] [--resume-last|--resume|--fresh] [--model <provider/model[#variant]>] [--effort <variant>] [--idle-timeout <seconds>] [--prompt-file <path>] [prompt]",
       "  node scripts/opencode-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/opencode-companion.mjs result [job-id] [--json]",
       "  node scripts/opencode-companion.mjs cancel [job-id] [--json]"
@@ -439,6 +439,7 @@ async function executeTaskRun(request) {
     effort: request.effort,
     idleTimeoutSeconds: request.idleTimeoutSeconds,
     readOnly: !request.write,
+    autoApprove: Boolean(request.auto),
     onProgress: request.onProgress,
     title: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
   });
@@ -550,7 +551,7 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, idleTimeoutSeconds, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({ cwd, model, effort, idleTimeoutSeconds, prompt, write, auto, resumeLast, jobId }) {
   return {
     cwd,
     model,
@@ -558,6 +559,7 @@ function buildTaskRequest({ cwd, model, effort, idleTimeoutSeconds, prompt, writ
     idleTimeoutSeconds,
     prompt,
     write,
+    auto,
     resumeLast,
     jobId
   };
@@ -690,7 +692,7 @@ async function handleReview(argv) {
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "prompt-file", "idle-timeout"],
-    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
+    booleanOptions: ["json", "write", "auto", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
     }
@@ -712,6 +714,7 @@ async function handleTask(argv) {
     throw new Error("Choose either --resume/--resume-last or --fresh.");
   }
   const write = Boolean(options.write);
+  const auto = Boolean(options.auto);
   const taskMetadata = buildTaskRunMetadata({
     prompt,
     resumeLast
@@ -729,6 +732,7 @@ async function handleTask(argv) {
       idleTimeoutSeconds,
       prompt,
       write,
+      auto,
       resumeLast,
       jobId: job.id
     });
@@ -748,6 +752,7 @@ async function handleTask(argv) {
         idleTimeoutSeconds,
         prompt,
         write,
+        auto,
         resumeLast,
         jobId: job.id,
         onProgress: progress

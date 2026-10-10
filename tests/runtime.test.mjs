@@ -501,6 +501,43 @@ test("write task output focuses on the OpenCode result without generic follow-up
   assert.equal(result.stdout, "Handled the requested task.\nTask prompt accepted.\n");
 });
 
+test("task --write --auto passes --auto to OpenCode; without --auto or in read-only mode it does not", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  const statePath = path.join(binDir, "fake-opencode-state.json");
+  installFakeOpencode(binDir);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const lastFlags = () => JSON.parse(fs.readFileSync(statePath, "utf8")).lastRun;
+
+  const auto = run("node", [SCRIPT, "task", "--write", "--auto", "fix the failing test"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(auto.status, 0, auto.stderr);
+  assert.equal(lastFlags().agent, "build");
+  assert.ok(lastFlags().flags.includes("--auto"));
+  assert.ok(!lastFlags().prompt.includes("--auto"));
+
+  const plain = run("node", [SCRIPT, "task", "--write", "fix the failing test"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.ok(!lastFlags().flags.includes("--auto"));
+
+  const readOnly = run("node", [SCRIPT, "task", "--auto", "diagnose the failing test"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+  assert.equal(readOnly.status, 0, readOnly.stderr);
+  assert.equal(lastFlags().agent, "cc-companion-readonly");
+  assert.ok(!lastFlags().flags.includes("--auto"));
+});
+
 test("task --resume acts like --resume-last without leaking the flag into the prompt", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

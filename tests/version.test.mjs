@@ -29,7 +29,7 @@ test("bump levels follow semantic versioning", () => {
   assert.ok(compareVersions("0.10.0", "0.9.9") > 0);
 });
 
-const PLUGIN_NAMES = ["opencode", "typescript7-lsp"];
+const PLUGIN_NAMES = ["opencode", "pi", "typescript7-lsp"];
 
 function writeVersions(repo, version) {
   fs.mkdirSync(path.join(repo, ".claude-plugin"), { recursive: true });

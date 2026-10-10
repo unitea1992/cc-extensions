@@ -1,6 +1,6 @@
 {
   "name": "typescript7-lsp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "TypeScript language server for Claude Code that runs on TypeScript 7 (tsc --lsp --stdio).",
   "author": {
     "name": "unitea1992"
