@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+# AI のレビューは CodeRabbit の1つだけにする（unitea1992/workspace-guide#263）。
+# 秘密情報は GitHub の Push Protection と開発機の pre-commit が受け持つので、ここでは見ない。
+language: ja-JP
+reviews:
+  profile: chill
+  poem: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  related_issues: false
+  related_prs: false
+  in_progress_fortune: false
+  auto_review:
+    enabled: true
+    drafts: false
+    ignore_usernames:
+      - "dependabot[bot]"
+  tools:
+    gitleaks:
+      enabled: false
+    trufflehog:
+      enabled: false
