@@ -20,7 +20,7 @@ Execution rules:
 - Leave `--effort` unset unless the user explicitly requests a specific effort.
 - Leave model unset by default. Add `--model` only when the user explicitly asks for one.
 - Models use the OpenCode `provider/model` form. `/opencode:setup` lists the available ones.
-- Default to a write-capable OpenCode run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
+- Default to a write-capable OpenCode run by adding `--write` unless the user explicitly asks for read-only behavior or only wants a review without edits.
 
 Command selection:
 - Use exactly one `task` invocation per rescue handoff.

@@ -40,10 +40,12 @@ function evaluate(action, resource) {
   return match?.effect ?? "ask";
 }
 
-test("read-only agent allows reading and read-only git, and denies every write path", () => {
+test("read-only agent allows reading, web search and read-only git, and denies every write path", () => {
   assert.equal(evaluate("read", "/repo/src/app.js"), "allow");
   assert.equal(evaluate("glob", "/repo"), "allow");
   assert.equal(evaluate("grep", "/repo"), "allow");
+  assert.equal(evaluate("webfetch", "https://example.com"), "allow");
+  assert.equal(evaluate("websearch", "pi coding agent"), "allow");
   for (const command of ["git status", "git status --short", "git diff", "git diff --stat main...HEAD", "git log -5 --oneline", "git show HEAD:src/app.js"]) {
     assert.equal(evaluate("shell", command), "allow", command);
   }
@@ -66,7 +68,6 @@ test("read-only agent allows reading and read-only git, and denies every write p
     ["read", "/repo/.env"],
     ["read", "/repo/.env.local"],
     ["external_directory", "/etc"],
-    ["webfetch", "https://example.com"],
     ["subagent", "general"],
     ["mcp_xserver_deploy", "*"]
   ]) {

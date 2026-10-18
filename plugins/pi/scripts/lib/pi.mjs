@@ -16,7 +16,9 @@ export const IDLE_TIMEOUT_ENV = "PI_COMPANION_IDLE_TIMEOUT_SECONDS";
 // event per finished part, so a long tool call or reasoning block can be silent for minutes; keep
 // the default generous, as local models are slow.
 export const DEFAULT_IDLE_TIMEOUT_SECONDS = 600;
-export const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
+// A read-only run removes only the tools that change files or run commands, so web search and other
+// extension tools stay available.
+export const READ_ONLY_EXCLUDED_TOOLS = ["edit", "write", "bash"];
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const TASK_THREAD_PREFIX = "Pi Companion Task";
 const DEFAULT_CONTINUE_PROMPT =
@@ -128,7 +130,7 @@ function describeIdleTimeout(ms) {
 export function buildRunArgs(options = {}) {
   const args = ["--print", "--mode", "json"];
   if (options.readOnly !== false) {
-    args.push("--tools", READ_ONLY_TOOLS.join(","));
+    args.push("--exclude-tools", READ_ONLY_EXCLUDED_TOOLS.join(","));
   }
   if (options.model) {
     args.push("--model", options.model);
