@@ -4,6 +4,10 @@
 プラグインの版はそろえて上げます。
 版の上げ方は [CONTRIBUTING.md の「版の管理」](CONTRIBUTING.md#版の管理) を参照してください。
 
+## 0.4.2
+
+- 読み取り専用の実行でも Web 検索を使えるようにした（#17）。Pi は `--tools read,grep,find,ls` をやめて `--exclude-tools edit,write,bash` で書き換えとコマンドの道具だけを外し、OpenCode は `webfetch`・`websearch` を許す。`pi-rescue`・`opencode-rescue` は、書き換えのない調べものも書き込みありで流す。
+
 ## 0.4.1
 
 - `pi-rescue` サブエージェントの指示文にあったモデル名の例を、一般的な `openai/gpt-5.5` に替えた（#14）。動作は変わらない。
