@@ -18,7 +18,7 @@ export const IDLE_TIMEOUT_ENV = "PI_COMPANION_IDLE_TIMEOUT_SECONDS";
 export const DEFAULT_IDLE_TIMEOUT_SECONDS = 600;
 // A read-only run removes only the tools that change files or run commands, so web search and other
 // extension tools stay available.
-export const READ_ONLY_EXCLUDED_TOOLS = ["edit", "write", "bash"];
+export const READ_ONLY_EXCLUDED_TOOLS = ["edit", "write", "bash", "powershell"];
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const TASK_THREAD_PREFIX = "Pi Companion Task";
 const DEFAULT_CONTINUE_PROMPT =

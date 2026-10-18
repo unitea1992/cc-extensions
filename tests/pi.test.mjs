@@ -57,7 +57,7 @@ test("a read-only task removes only the tools that change files or run commands 
   assert.equal(result.stdout, "Handled the requested task.\n");
 
   const [runState] = readFakePiState(binDir).runs;
-  assert.equal(option(runState.argv, "--exclude-tools"), "edit,write,bash");
+  assert.equal(option(runState.argv, "--exclude-tools"), "edit,write,bash,powershell");
   assert.equal(option(runState.argv, "--tools"), null);
   assert.deepEqual(runState.argv.slice(0, 3), ["--print", "--mode", "json"]);
   assert.equal(runState.prompt, "diagnose the failing test");
