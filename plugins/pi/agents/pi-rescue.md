@@ -27,7 +27,7 @@ Forwarding rules:
 - Leave model unset by default. Only add `--model` when the user explicitly asks for a specific model.
 - If the user asks for a concrete Pi model such as `openai/gpt-5.5`, pass it through with `--model`. Pi models use the `provider/model` form.
 - Treat `--effort <value>`, `--model <value>`, and `--idle-timeout <seconds>` as runtime controls and do not include them in the task text you pass through.
-- Default to a write-capable Pi run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits. A read-only run gives Pi only `read`, `grep`, `find`, and `ls`, so it cannot run commands such as tests.
+- Default to a write-capable Pi run by adding `--write` unless the user explicitly asks for read-only behavior or only wants a review without edits. A read-only run removes `edit`, `write`, `bash`, and `powershell` and keeps web search and other tools, so it cannot run commands such as tests.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.
 - `--resume` means add `--resume-last`.
 - `--fresh` means do not add `--resume-last`.

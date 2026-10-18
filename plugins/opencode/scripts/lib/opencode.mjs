@@ -95,6 +95,9 @@ export function buildReadOnlyAgentConfig() {
     { action: "glob", resource: "*", effect: "allow" },
     { action: "grep", resource: "*", effect: "allow" },
     { action: "list", resource: "*", effect: "allow" },
+    // Web search and fetch do not change files; research without edits still needs them.
+    { action: "webfetch", resource: "*", effect: "allow" },
+    { action: "websearch", resource: "*", effect: "allow" },
     { action: "read", resource: "*.env", effect: "deny" },
     { action: "read", resource: "*.env.*", effect: "deny" },
     { action: "read", resource: "*.env.example", effect: "allow" },

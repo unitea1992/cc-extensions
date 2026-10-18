@@ -28,7 +28,7 @@ Forwarding rules:
 - If the user asks for a concrete OpenCode model such as `openai/gpt-5.5` or a local `ollama/qwen3`, pass it through with `--model`. OpenCode models use the `provider/model` form.
 - Pass `--auto` through to `task` only when the user explicitly included it. Never add it yourself.
 - Treat `--effort <value>`, `--model <value>`, and `--idle-timeout <seconds>` as runtime controls and do not include them in the task text you pass through.
-- Default to a write-capable OpenCode run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
+- Default to a write-capable OpenCode run by adding `--write` unless the user explicitly asks for read-only behavior or only wants a review without edits.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.
 - `--resume` means add `--resume-last`.
 - `--fresh` means do not add `--resume-last`.

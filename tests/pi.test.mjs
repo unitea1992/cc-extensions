@@ -50,14 +50,15 @@ test("setup says Pi is unavailable when the command is missing", () => {
   assert.ok(report.nextSteps.length > 0);
 });
 
-test("a read-only task gives Pi only the tools that cannot change files and sends the prompt on stdin", () => {
+test("a read-only task removes only the tools that change files or run commands and sends the prompt on stdin", () => {
   const { repo, binDir, env } = setup();
   const result = run("node", [SCRIPT, "task", "diagnose the failing test"], { cwd: repo, env });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, "Handled the requested task.\n");
 
   const [runState] = readFakePiState(binDir).runs;
-  assert.equal(option(runState.argv, "--tools"), "read,grep,find,ls");
+  assert.equal(option(runState.argv, "--exclude-tools"), "edit,write,bash,powershell");
+  assert.equal(option(runState.argv, "--tools"), null);
   assert.deepEqual(runState.argv.slice(0, 3), ["--print", "--mode", "json"]);
   assert.equal(runState.prompt, "diagnose the failing test");
   // Only a short excerpt reaches the command line, as the session name.
@@ -71,6 +72,7 @@ test("a write task leaves Pi's default tools and does not restrict them", () => 
 
   const [runState] = readFakePiState(binDir).runs;
   assert.equal(option(runState.argv, "--tools"), null);
+  assert.equal(option(runState.argv, "--exclude-tools"), null);
   assert.ok(!runState.argv.includes("--approve"));
 });
 
