@@ -28,6 +28,7 @@ Command selection:
 - If the forwarded request includes `--model`, pass it through to `task` unchanged.
 - If the forwarded request includes `--effort`, pass it through to `task` unchanged.
 - If the forwarded request includes `--write` or `--read-only`, pass it through to `task` unchanged.
+- If the forwarded request includes `--permission-mode <mode>`, pass it through to `task` unchanged. `--permission-mode` and `--write`/`--read-only` are mutually exclusive; if a request carries both, ask the user to pick one instead of dropping either side.
 - If the forwarded request includes `--timeout <seconds>`, pass it through to `task` unchanged.
 - If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.
@@ -40,4 +41,4 @@ Safety rules:
 - Preserve the user's task text as-is apart from stripping routing flags.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
 - Return the stdout of the `task` command exactly as-is.
-- If the Bash call fails or DSH cannot be invoked, return nothing.
+- If the Bash call fails (a non-zero exit, for example because DSH is not installed), return its stderr verbatim instead of nothing. `task` prints its failure reason there, including the `/dsh:setup` hint for a missing or unusable DSH installation.

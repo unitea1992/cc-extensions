@@ -19,6 +19,8 @@ function normalizeProgressEvent(value) {
       threadId: typeof value.threadId === "string" && value.threadId.trim() ? value.threadId.trim() : null,
       turnId: typeof value.turnId === "string" && value.turnId.trim() ? value.turnId.trim() : null,
       runnerPid: Number.isInteger(value.runnerPid) && value.runnerPid > 0 ? value.runnerPid : null,
+      runnerCommand:
+        typeof value.runnerCommand === "string" && value.runnerCommand.trim() ? value.runnerCommand.trim() : null,
       stderrMessage: value.stderrMessage == null ? null : String(value.stderrMessage).trim(),
       logTitle: typeof value.logTitle === "string" && value.logTitle.trim() ? value.logTitle.trim() : null,
       logBody: value.logBody == null ? null : String(value.logBody).trimEnd()
@@ -31,6 +33,7 @@ function normalizeProgressEvent(value) {
     threadId: null,
     turnId: null,
     runnerPid: null,
+    runnerCommand: null,
     stderrMessage: String(value ?? "").trim(),
     logTitle: null,
     logBody: null
@@ -76,6 +79,7 @@ export function createJobProgressUpdater(workspaceRoot, jobId) {
   let lastThreadId = null;
   let lastTurnId = null;
   let lastRunnerPid = null;
+  let lastRunnerCommand = null;
 
   return (event) => {
     const normalized = normalizeProgressEvent(event);
@@ -106,19 +110,29 @@ export function createJobProgressUpdater(workspaceRoot, jobId) {
       changed = true;
     }
 
+    if (normalized.runnerCommand && normalized.runnerCommand !== lastRunnerCommand) {
+      lastRunnerCommand = normalized.runnerCommand;
+      patch.runnerCommand = normalized.runnerCommand;
+      changed = true;
+    }
+
     if (!changed) {
       return;
     }
 
-    if (!fs.existsSync(resolveJobFile(workspaceRoot, jobId))) {
-      return;
-    }
-    upsertJob(workspaceRoot, patch);
+    // Check the cancel marker before anything else, including the job file's existence: a
+    // SessionEnd that already cancelled the job may have removed the record in between, and a
+    // missing file must not stop the worker from enforcing the marker on itself.
     if (enforceCancelMarker(workspaceRoot, jobId)) {
       // Cancelled while running: stop ourselves. The SIGTERM handler installed by the DSH
       // runner forwards the signal to its process group before exiting.
       process.kill(process.pid, "SIGTERM");
+      return;
     }
+    if (!fs.existsSync(resolveJobFile(workspaceRoot, jobId))) {
+      return;
+    }
+    upsertJob(workspaceRoot, patch);
   };
 }
 
@@ -170,7 +184,12 @@ export function enforceCancelMarker(workspaceRoot, jobId) {
   if (!isJobCancelMarked(workspaceRoot, jobId)) {
     return false;
   }
-  restoreCancelledRecord(workspaceRoot, jobId, readStoredJobOrNull(workspaceRoot, jobId) ?? { id: jobId });
+  // Only restore the record while it still exists. SessionEnd removes a cancelled job's file but
+  // keeps the marker as a tombstone, and a tombstone must not resurrect a record the hook cleaned.
+  const stored = readStoredJobOrNull(workspaceRoot, jobId);
+  if (stored) {
+    restoreCancelledRecord(workspaceRoot, jobId, stored);
+  }
   return true;
 }
 
@@ -193,9 +212,12 @@ export async function runTrackedJob(job, runner, options = {}) {
   // pid closes the window: either cancel saw this pid and will stop us, or we see its marker here.
   if (isJobCancelMarked(job.workspaceRoot, job.id)) {
     // Nothing was started and this process exits right away, so its pid must not stay on record
-    // where a later cancel could signal an unrelated process that reused it.
-    restoreCancelledRecord(job.workspaceRoot, job.id, { ...runningRecord, pid: null, runnerPid: null });
-    upsertJob(job.workspaceRoot, { id: job.id, pid: null, runnerPid: null });
+    // where a later cancel could signal an unrelated process that reused it. SessionEnd may have
+    // removed the record already; patch it only while it exists and never recreate it.
+    if (fs.existsSync(resolveJobFile(job.workspaceRoot, job.id))) {
+      restoreCancelledRecord(job.workspaceRoot, job.id, { ...runningRecord, pid: null, runnerPid: null });
+      upsertJob(job.workspaceRoot, { id: job.id, pid: null, runnerPid: null });
+    }
     throw new Error(`Job ${job.id} was cancelled before it started.`);
   }
 

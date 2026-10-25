@@ -10,9 +10,11 @@ import { writeExecutable } from "./helpers.mjs";
 
 export const FAKE_DST_MODELS = ["logfare/glm-5.3", "logfare/glm-5.3-flash", "openrouter/minimax/m3.1:free"];
 
-export function installFakeDst(binDir, behavior = "ok") {
+export function installFakeDst(binDir, behavior = "ok", options = {}) {
   const statePath = path.join(binDir, "fake-dst-state.json");
-  const scriptPath = path.join(binDir, "dst");
+  // The companion matches a runner's process against the command it was started with, so the
+  // fixture can be installed under a different name to stand in for a DSH_COMPANION_BIN override.
+  const scriptPath = path.join(binDir, options.name ?? "dst");
   const source = `#!/usr/bin/env node
 const fs = require("node:fs");
 
@@ -76,6 +78,13 @@ if (argv[0] === "--version") {
       setInterval(() => {}, 1000);
       return;
     }
+    if (BEHAVIOR === "ignore-term") {
+      // A runner that swallows SIGTERM: only the SIGKILL escalation can stop it.
+      process.on("SIGTERM", () => {});
+      process.on("SIGINT", () => {});
+      setInterval(() => {}, 1000);
+      return;
+    }
     if (BEHAVIOR === "exit1") {
       process.stderr.write("Error: Model not found\\n");
       process.exit(1);
@@ -113,7 +122,7 @@ export function readFakeDstState(binDir) {
 
 export function buildDstEnv(binDir, extra = {}) {
   const sep = process.platform === "win32" ? ";" : ":";
-  const env = { ...process.env, PATH: `${binDir}${sep}${process.env.PATH}`, ...extra };
+  const env = { ...process.env, PATH: `${binDir}${sep}${process.env.PATH}` };
   delete env.DSH_COMPANION_BIN;
-  return env;
+  return { ...env, ...extra };
 }

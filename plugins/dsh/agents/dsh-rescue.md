@@ -19,6 +19,7 @@ Selection guidance:
 Forwarding rules:
 
 - Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/dsh-companion.mjs" task ...`.
+- `--background` and `--wait` are execution flags for Claude Code, not for `task`. Strip them and never forward them to `task`: a `--background` leaking into `task` would silently turn a foreground request into a background job.
 - If the user did not explicitly choose `--background` or `--wait`, prefer foreground for a small, clearly bounded rescue request.
 - If the user did not explicitly choose `--background` or `--wait` and the task looks complicated, open-ended, multi-step, or likely to keep DSH running for a long time, prefer background execution.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
@@ -26,7 +27,8 @@ Forwarding rules:
 - Leave `--effort` unset unless the user explicitly requests a specific reasoning effort. Effort levels are model-specific; DSH rejects an unsupported value when the run starts.
 - Leave model unset by default. Only add `--model` when the user explicitly asks for a specific model. DSH models use the `provider/model` form; `/dsh:setup` lists the available ones.
 - If the user asks for a concrete DSH model such as `logfare/glm-5.3`, pass it through with `--model`. DSH models use the `provider/model` form.
-- Treat `--effort <value>`, `--model <value>`, and `--timeout <seconds>` as runtime controls and do not include them in the task text you pass through.
+- Treat `--effort <value>`, `--model <value>`, `--timeout <seconds>`, and `--permission-mode <mode>` as runtime controls and do not include them in the task text you pass through.
+- `--permission-mode <mode>` and `--write`/`--read-only` are mutually exclusive; if the request carries both, ask the user to pick one instead of dropping either side.
 - Default to a write-capable DSH run by adding `--write` unless the user explicitly asks for read-only behavior or only wants a review without edits. A read-only run uses DSH's `read-only` permission mode, so it cannot change files or run state-changing commands.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.
 - `--resume` means add `--resume-last`.
@@ -35,7 +37,7 @@ Forwarding rules:
 - Otherwise forward the task as a fresh `task` run.
 - Preserve the user's task text as-is apart from stripping routing flags.
 - Return the stdout of the `dsh-companion` command exactly as-is.
-- If the Bash call fails or DSH cannot be invoked, return nothing.
+- If the Bash call fails (a non-zero exit, for example because DSH is not installed), return its stderr verbatim instead of nothing. `task` prints its failure reason there, including the `/dsh:setup` hint for a missing or unusable DSH installation.
 
 Response style:
 

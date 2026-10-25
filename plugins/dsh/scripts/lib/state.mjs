@@ -201,7 +201,8 @@ function pruneOrphanCancelMarkers(cwd) {
   }
 }
 
-// Keep the newest MAX_JOBS jobs. Active jobs are never pruned.
+// Keep the newest MAX_JOBS jobs. Active jobs are never pruned, so a job that was just created
+// (queued or running) always survives its own creation even when timestamps tie.
 function pruneJobs(cwd) {
   const jobs = listJobFiles(cwd).sort((left, right) =>
     String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? ""))
@@ -270,7 +271,15 @@ export function getConfig(cwd) {
 export function writeJobFile(cwd, jobId, payload) {
   ensureStateDir(cwd);
   const jobFile = resolveJobFile(cwd, jobId);
+  const isNew = !fs.existsSync(jobFile);
   writeJsonAtomic(jobFile, { ...payload, id: payload.id ?? jobId, updatedAt: nowIso() });
+  if (isNew) {
+    // Every job-creation path (enqueue, runTrackedJob, restoreCancelledRecord) writes the file
+    // before it calls upsertJob, so upsertJob always sees an "existing" job and its own
+    // new-job pruning would never fire. Prune here instead: this is the one place that can
+    // tell a new job file from an update to an old one.
+    pruneJobs(cwd);
+  }
   return jobFile;
 }
 

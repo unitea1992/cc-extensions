@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the DSH rescue subagent
-argument-hint: "[--background|--wait] [--resume|--fresh] [--model <provider/model>] [--effort <level>] [--write|--read-only] [--timeout <seconds>] [what DSH should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--resume|--fresh] [--model <provider/model>] [--effort <level>] [--write|--read-only] [--permission-mode <mode>] [--timeout <seconds>] [what DSH should investigate, solve, or continue]"
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
@@ -17,7 +17,8 @@ Execution mode:
 - If the request includes `--wait`, run the `dsh:dsh-rescue` subagent in the foreground.
 - If neither flag is present, default to foreground.
 - `--background` and `--wait` are execution flags for Claude Code. Do not forward them to `task`, and do not treat them as part of the natural-language task text.
-- `--model`, `--effort`, `--write`, `--read-only`, and `--timeout` are runtime-selection flags. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text.
+- `--model`, `--effort`, `--write`, `--read-only`, `--permission-mode`, and `--timeout` are runtime-selection flags. Preserve them for the forwarded `task` call, but do not treat them as part of the natural-language task text.
+- `--permission-mode` and `--write`/`--read-only` are mutually exclusive in `task`. If the request carries both, ask the user to pick one instead of forwarding a contradictory combination.
 - If the request includes `--resume`, do not ask whether to continue. The user already chose.
 - If the request includes `--fresh`, do not ask whether to continue. The user already chose.
 - Otherwise, before starting DSH, check for a resumable rescue session from this Claude session by running:
@@ -45,5 +46,5 @@ Operating rules:
 - Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort. Effort levels are model-specific; DSH rejects an unsupported value when the run starts.
 - Leave the model unset unless the user explicitly asks for one. DSH models use the `provider/model` form; `/dsh:setup` lists the available ones.
 - Leave `--resume` and `--fresh` in the forwarded request. The subagent handles that routing when it builds the `task` command.
-- If the helper reports that DSH is missing or has no usable model, stop and tell the user to run `/dsh:setup`.
+- If the `task` command fails because DSH is missing or has no usable setup, it exits non-zero and prints the reason on stderr (the error says to rerun `/dsh:setup`). The subagent returns that error verbatim; do not replace it with a silent empty response, and do not retry with an improvised setup.
 - If the user did not supply a request, ask what DSH should investigate or fix.

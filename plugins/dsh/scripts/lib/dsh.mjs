@@ -44,6 +44,12 @@ export function getDshCommand(env = process.env) {
   return env[DSH_BIN_ENV] || "dst";
 }
 
+// Cancel and SessionEnd match the runner's process group against the command it was started with,
+// so the recorded name must follow a DSH_COMPANION_BIN replacement instead of assuming `dst`.
+export function getRunnerCommandName(env = process.env) {
+  return path.basename(getDshCommand(env));
+}
+
 // `dst --version` proves the launcher is on PATH; `dst run --help` is printed without starting
 // DSH and proves this dst speaks the flags the companion needs.
 export function getDshAvailability(cwd, options = {}) {
@@ -226,6 +232,8 @@ export function buildRunArgs(options = {}) {
   if (options.resumeSessionId) {
     args.push("--session-id", options.resumeSessionId);
   }
+  // --permission-mode and --write/--read-only are rejected together upstream; the explicit mode
+  // still wins here so a stored request from an older version cannot fall back to a weaker level.
   const mode = normalizePermissionMode(options.permissionMode) ?? (options.readOnly ? "read-only" : null);
   if (mode) {
     args.push("--permission-mode", mode);
@@ -331,7 +339,8 @@ async function runAttempt({ cwd, args, env, prompt, options }) {
 
   if (child.pid) {
     emitProgress(options.onProgress, `DSH process started (pid ${child.pid}).`, "starting", {
-      runnerPid: child.pid
+      runnerPid: child.pid,
+      runnerCommand: getRunnerCommandName(env)
     });
   }
 

@@ -6,20 +6,16 @@ This product includes software derived from openai/codex-plugin-cc
 licensed under the Apache License, Version 2.0.
 
 Modifications: the Codex app-server and broker runtime were replaced with
-one-shot `opencode run --standalone --format json` executions; reviews now
-collect the diff and request schema-shaped JSON through prompts; read-only
-runs inject a dedicated OpenCode agent per run; Codex-specific features
-(session transfer, GPT prompting skill, model aliases) were removed; command,
-skill, agent, and test names were changed from Codex to OpenCode. Changed
-JavaScript files carry a "Modified from openai/codex-plugin-cc" header; the
-command, agent, skill, and prompt Markdown files were also adapted.
-
-The `dsh` plugin reuses the job-tracking and companion structure of the `opencode`
-plugin, replacing the OpenCode runtime with one-shot `dst run --json`
-executions for DSH (DeepSeek Harness); it has no review commands. The model
-and reasoning effort are selected with a bundled overlay patch that reads the
-DSH_LAUNCH_PROVIDER / DSH_LAUNCH_MODEL / DSH_LAUNCH_EFFORT environment
-variables.
+one-shot `dst run --json` executions for DSH (DeepSeek Harness); there are no
+review commands in this plugin; the model and reasoning effort are selected
+with a bundled overlay patch that reads the DSH_LAUNCH_PROVIDER /
+DSH_LAUNCH_MODEL / DSH_LAUNCH_EFFORT environment variables; the job-tracking
+and companion structure of the `opencode` plugin is reused; Codex-specific
+features (session transfer, GPT prompting skill, model aliases) were removed;
+command, skill, agent, and test names were changed from Codex/OpenCode to
+DSH. Changed JavaScript files carry a "Modified from openai/codex-plugin-cc"
+header; the command, agent, skill, and prompt Markdown files were also
+adapted.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

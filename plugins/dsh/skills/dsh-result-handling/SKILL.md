@@ -12,6 +12,6 @@ When the helper returns DSH output:
 - Preserve evidence boundaries. If DSH marked something as an inference, uncertainty, or follow-up question, keep that distinction.
 - If DSH made edits, say so explicitly and list the touched files when the helper provides them.
 - For `dsh:dsh-rescue`, do not turn a failed or incomplete DSH run into a Claude-side implementation attempt. Report the failure and stop.
-- For `dsh:dsh-rescue`, if DSH was never successfully invoked, do not generate a substitute answer at all.
+- For `dsh:dsh-rescue`, if DSH was never successfully invoked, return the forwarder command's error output (its stderr) instead of generating a substitute answer.
 - If the helper reports a failed DSH run, include the error code and message it surfaced (for example an UNSUPPORTED_REASONING_EFFORT startup rejection) and stop there instead of guessing.
-- If the helper reports that setup is required, direct the user to `/dsh:setup` and do not improvise alternate auth flows.
+- If the helper's error says DSH is missing or unusable and points at `/dsh:setup`, pass that error through and direct the user to `/dsh:setup`; do not improvise alternate auth flows.

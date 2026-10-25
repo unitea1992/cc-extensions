@@ -372,9 +372,9 @@ DSH のセッションには TinyFish の MCP（Web 検索・本文取得。無�
   モデル名自身に `/` が含まれる場合（`openrouter/minimax/…:free` など）は、最初の `/` までがプロバイダーです。
 - `--effort <段階>`：モデルの推論量を選びます。
   候補はモデルごとに違い（例：logfare の `glm-5.3` は `low`・`high`・`max`）、対応しない値は DSH の起動検証（UNSUPPORTED_REASONING_EFFORT）で止まるため、結果に表示されるエラーで確認してください。
-- `--write` / `--read-only`：既定では書き込みありで実行します。
-  読み取り専用にしたいときは、その旨を依頼文に書いてください。
+- `--write` / `--read-only`：既定では書き込みあり（`workspace-write`）で実行します。読み取り専用にするときは `--read-only` を付けます。
 - `--permission-mode <mode>`：DSH の権限を直接選びます（`read-only`、`workspace-write`、`danger-full-access`）。
+  `--write`・`--read-only` との併用はできません（矛盾する指定はエラーになります）。
 - `--timeout <秒>`：DSH の実行時間の上限。既定は無制限で、超えたら dst の終了コード 124 として失敗を返します。
 
 前回の作業を DSH 側の画面で続けたいときは、結果に表示される `dst run --session-id <id>` を使います。
@@ -392,14 +392,15 @@ node "$DS" result <jobId>
 
 DSH には権限の段階として `read-only`・`workspace-write`・`danger-full-access` があります。
 既定（`--write`）の実行は `workspace-write` で、作業ディレクトリの中への書き込みは許可され、外への書き込みは DSH の承認規則に従います。
-読み取り専用の実行は `--permission-mode read-only` で、ファイルの変更もコマンドもできません。
-作業ディレクトリの外にも書かせたいときは、`--permission-mode danger-full-access` を明示的に指定してください。
+読み取り専用の実行は `--read-only`（または単独の `--permission-mode read-only`）で、ファイルの変更もコマンドもできません。
+作業ディレクトリの外にも書かせたいときは、`--write` を付けずに `--permission-mode danger-full-access` を指定してください。
 この制限は DSH の権限設定によるもので、プラグインが利用者の DSH 設定や認証情報を書き換えることはありません。
 
 ### 実行のしかた
 
 DSH はジョブごとに `dst run --json` で起動し、終わったら止まります。
 常駐するプロセスは残りません。
+ジョブの記録（プロンプトと結果を含む）は新しい順に50件まで保持され、それより古い終了済みジョブのファイルは自動的に削除されます。
 指示文は標準入力で渡すので、長さの上限はありません。
 
 headless の `dst run` に `--profile dsh-tui` を渡すと固まるため、プロバイダーの定義は `--patch ~/.dsh/profiles/dsh-tui/cordis.patch.yml` で重ねて渡します（ファイルがなければ渡しません）。

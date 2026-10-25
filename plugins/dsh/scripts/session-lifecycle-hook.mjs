@@ -41,23 +41,56 @@ function appendEnvVar(name, value) {
   fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export ${name}=${shellEscape(value)}\n`, "utf8");
 }
 
-// The companion worker (node dsh-companion.mjs) and the DSH runner it started (dst) carry
-// different command names, so each process group is matched against its own expected command.
+// The companion worker (node dsh-companion.mjs) and the DSH runner it started carry different
+// command names, so each process group is matched against its own expected command. The runner's
+// name is the one it was actually started with (a DSH_COMPANION_BIN replacement may not be
+// called `dst`), so each distinct recorded command gets one shared stop call.
 function stopSessionProcesses(targets) {
   const workerPids = targets.map((target) => target.pid ?? Number.NaN);
-  const runnerPids = targets.map((target) => target.runnerPid ?? Number.NaN);
+  const runnerEntries = targets.map((target) => ({
+    pid: target.runnerPid ?? Number.NaN,
+    command: target.runnerCommand || "dst"
+  }));
   let workerResults = workerPids.map(() => ({ stopped: false }));
-  let runnerResults = runnerPids.map(() => ({ stopped: false }));
+  let runnerResults = runnerEntries.map(() => ({ stopped: true }));
   try {
     workerResults = stopProcessGroups(workerPids, { expectCommand: "dsh-companion", graceMs: 1500, killWaitMs: 1500 });
-    runnerResults = stopProcessGroups(runnerPids, { expectCommand: "dst", graceMs: 1500, killWaitMs: 1500 });
+    runnerResults = stopSessionRunners(runnerEntries);
   } catch {
     // Treat as not stopped; the records below are kept so the processes can still be found.
+    workerResults = workerPids.map(() => ({ stopped: false }));
+    runnerResults = runnerEntries.map(() => ({ stopped: false }));
   }
   return targets.map((_, index) => ({
     workerStopped: workerResults[index].stopped,
     runnerStopped: runnerResults[index].stopped
   }));
+}
+
+// Stops every distinct runner command with one shared grace period each, so the total time stays
+// bounded no matter how many groups there are. Entries without a pid are already gone.
+function stopSessionRunners(runnerEntries) {
+  const results = runnerEntries.map(() => ({ attempted: false, stopped: true, forced: false }));
+  const byCommand = new Map();
+  runnerEntries.forEach((entry, index) => {
+    if (!Number.isFinite(entry.pid)) {
+      return;
+    }
+    if (!byCommand.has(entry.command)) {
+      byCommand.set(entry.command, []);
+    }
+    byCommand.get(entry.command).push(index);
+  });
+  for (const [command, indexes] of byCommand) {
+    const stopped = stopProcessGroups(
+      indexes.map((index) => runnerEntries[index].pid),
+      { expectCommand: command, graceMs: 1500, killWaitMs: 1500 }
+    );
+    indexes.forEach((targetIndex, position) => {
+      results[targetIndex] = stopped[position];
+    });
+  }
+  return results;
 }
 
 function cleanupSessionJobs(cwd, sessionId) {
@@ -72,10 +105,18 @@ function cleanupSessionJobs(cwd, sessionId) {
     return;
   }
 
-  // Mark every active job first so workers that are just starting stop on their own, then stop all
-  // process groups together. The hook has a hard time limit (hooks.json), so the stop uses one
-  // shared grace period instead of waiting on each job in turn. Cancelled jobs that still hold pids
-  // (a process survived an earlier cancel) are stopped again too.
+  // Mark every active job first, then read the pids, mirroring the companion's cancel: a worker
+  // that starts concurrently either publishes its pid before the read (and is stopped below) or
+  // sees the marker and stops itself. Reading the pids first would miss a pid published in the
+  // gap and leave its runner running. The hook has a hard time limit (hooks.json), so the stop
+  // uses one shared grace period per command instead of waiting on each job in turn. Cancelled
+  // jobs that still hold pids (a process survived an earlier cancel) are stopped again too.
+  for (const job of removedJobs) {
+    if (job.status === "queued" || job.status === "running") {
+      markJobCancelled(workspaceRoot, job.id);
+    }
+  }
+
   const targets = [];
   for (const job of removedJobs) {
     const jobFile = resolveJobFile(workspaceRoot, job.id);
@@ -86,10 +127,7 @@ function cleanupSessionJobs(cwd, sessionId) {
     if (!active && !pid && !runnerPid) {
       continue;
     }
-    if (active) {
-      markJobCancelled(workspaceRoot, job.id);
-    }
-    targets.push({ job, pid, runnerPid });
+    targets.push({ job, pid, runnerPid, runnerCommand: raw.runnerCommand ?? job.runnerCommand ?? null });
   }
 
   const stopped = stopSessionProcesses(targets);

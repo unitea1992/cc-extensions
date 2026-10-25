@@ -2,25 +2,95 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { buildDstEnv, FAKE_DST_MODELS, installFakeDst, readFakeDstState } from "./fake-dst-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
+import { resolveCancelMarkerFile, resolveStateDir } from "../plugins/dsh/scripts/lib/state.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_ROOT = path.join(ROOT, "plugins", "dsh");
 const SCRIPT = path.join(PLUGIN_ROOT, "scripts", "dsh-companion.mjs");
+const SESSION_HOOK = path.join(PLUGIN_ROOT, "scripts", "session-lifecycle-hook.mjs");
 const AGENT_MODEL_PATCH = path.join(PLUGIN_ROOT, "scripts", "patches", "agent-model.yml");
 
-function setup(behavior = "ok") {
+async function waitFor(predicate, { timeoutMs = 15000, intervalMs = 100 } = {}) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const value = await predicate();
+    if (value) {
+      return value;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error("Timed out waiting for condition.");
+}
+
+// Zombies still answer kill(pid, 0) on Linux, so read /proc and count only live states as alive.
+function pidGone(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return true;
+  }
+  if (process.platform !== "linux") {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (error) {
+      return error?.code === "ESRCH";
+    }
+  }
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
+    return state === "Z" || state === "X";
+  } catch {
+    return true;
+  }
+}
+
+function killProcessGroupBestEffort(pid) {
+  for (const target of [-pid, pid]) {
+    try {
+      process.kill(target, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
+// Launches a background task and resolves once its dst runner is up, so cancel and SessionEnd
+// tests always act on a job with a recorded runner pid.
+async function launchRunningBackgroundTask({ repo, env, prompt = "keep running" }) {
+  const launch = run(
+    "node",
+    [SCRIPT, "task", "--background", "--write", "--model", "logfare/glm-5.3", "--json", prompt],
+    { cwd: repo, env }
+  );
+  assert.equal(launch.status, 0, launch.stderr);
+  const { jobId } = JSON.parse(launch.stdout);
+  const runnerPid = await waitFor(() => {
+    const status = run("node", [SCRIPT, "status", jobId, "--json"], { cwd: repo, env });
+    assert.equal(status.status, 0, status.stderr);
+    const job = JSON.parse(status.stdout).job;
+    return job.status === "running" && job.runnerPid ? job.runnerPid : null;
+  });
+  return { jobId, runnerPid };
+}
+
+function setup(behavior = "ok", options = {}) {
   const repo = makeTempDir();
   const binDir = makeTempDir();
-  installFakeDst(binDir, behavior);
+  installFakeDst(binDir, behavior, { name: options.dstName ?? "dst" });
   initGitRepo(repo);
   fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
   run("git", ["add", "README.md"], { cwd: repo });
   run("git", ["commit", "-m", "init"], { cwd: repo });
-  return { repo, binDir, env: buildDstEnv(binDir) };
+  const env = buildDstEnv(binDir);
+  if (options.dstName && options.dstName !== "dst") {
+    env.DSH_COMPANION_BIN = path.join(binDir, options.dstName);
+  }
+  return { repo, binDir, env };
 }
 
 function option(argv, flag) {
@@ -158,11 +228,10 @@ test("a read-only task uses the read-only permission mode and a write task keeps
 
 test("--permission-mode is passed through and rejects unknown modes", () => {
   const { repo, binDir, env } = setup();
-  const result = run(
-    "node",
-    [SCRIPT, "task", "--write", "--permission-mode", "danger-full-access", "fix it"],
-    { cwd: repo, env }
-  );
+  const result = run("node", [SCRIPT, "task", "--permission-mode", "danger-full-access", "fix it"], {
+    cwd: repo,
+    env
+  });
   assert.equal(result.status, 0, result.stderr);
   const [runState] = readFakeDstState(binDir).runs;
   assert.equal(option(runState.argv, "--permission-mode"), "danger-full-access");
@@ -171,6 +240,28 @@ test("--permission-mode is passed through and rejects unknown modes", () => {
   assert.notEqual(invalid.status, 0);
   assert.match(invalid.stderr, /Unsupported permission mode "yolo"/);
   assert.equal(readFakeDstState(binDir).runs.length, 1);
+});
+
+test("--permission-mode cannot be combined with --write or --read-only", () => {
+  const { repo, binDir, env } = setup();
+  for (const flags of [
+    ["--read-only", "--permission-mode", "danger-full-access"],
+    ["--write", "--permission-mode", "read-only"],
+    ["--write", "--permission-mode", "danger-full-access"]
+  ]) {
+    const result = run("node", [SCRIPT, "task", ...flags, "fix it"], { cwd: repo, env });
+    assert.notEqual(result.status, 0, flags.join(" "));
+    assert.match(result.stderr, /Choose either --permission-mode or --write\/--read-only/, flags.join(" "));
+  }
+  // A stored background request replays through the same rule.
+  const launch = run(
+    "node",
+    [SCRIPT, "task", "--background", "--write", "--permission-mode", "read-only", "--json", "queued work"],
+    { cwd: repo, env }
+  );
+  assert.notEqual(launch.status, 0);
+  assert.match(launch.stderr, /Choose either --permission-mode or --write\/--read-only/);
+  assert.equal(readFakeDstState(binDir).runs.length, 0);
 });
 
 test("--timeout seconds become dst's --timeout milliseconds", () => {
@@ -183,6 +274,51 @@ test("--timeout seconds become dst's --timeout milliseconds", () => {
   const invalid = run("node", [SCRIPT, "task", "--write", "--timeout", "soon", "fix it"], { cwd: repo, env });
   assert.notEqual(invalid.status, 0);
   assert.match(invalid.stderr, /Invalid timeout "soon"/);
+});
+
+test("a task fails with a visible error when dst is missing", () => {
+  const { repo, env } = setup();
+  const result = run("node", [SCRIPT, "task", "--write", "do it"], {
+    cwd: repo,
+    env: { ...env, DSH_COMPANION_BIN: path.join(repo, "no-such-dst") }
+  });
+  assert.notEqual(result.status, 0);
+  // The failure must be visible, not empty: the rescue agent returns this stderr verbatim and
+  // its message is what points an uninstalled environment at /dsh:setup.
+  assert.ok(result.stderr.trim().length > 0);
+  assert.match(result.stderr, /DSH is not installed/);
+  assert.match(result.stderr, /\/dsh:setup/);
+
+  const status = run("node", [SCRIPT, "status", "--json"], { cwd: repo, env });
+  assert.equal(status.status, 0, status.stderr);
+  const failed = JSON.parse(status.stdout).latestFinished;
+  assert.equal(failed.status, "failed");
+  assert.match(failed.errorMessage, /DSH is not installed/);
+});
+
+test("creating the 51st job prunes the oldest finished job records", () => {
+  const { repo, env } = setup();
+  const jobsDir = path.join(resolveStateDir(repo), "jobs");
+  fs.mkdirSync(jobsDir, { recursive: true });
+  const base = Date.UTC(2026, 0, 1);
+  for (let index = 0; index < 50; index += 1) {
+    const at = new Date(base + index * 1000).toISOString();
+    fs.writeFileSync(
+      path.join(jobsDir, `old-${index}.json`),
+      JSON.stringify({ id: `old-${index}`, status: "completed", createdAt: at, updatedAt: at })
+    );
+  }
+
+  const launch = run("node", [SCRIPT, "task", "--background", "--write", "--json", "prune test"], {
+    cwd: repo,
+    env
+  });
+  assert.equal(launch.status, 0, launch.stderr);
+  const { jobId } = JSON.parse(launch.stdout);
+
+  assert.equal(fs.existsSync(path.join(jobsDir, "old-0.json")), false, "the oldest job record is pruned");
+  assert.equal(fs.existsSync(path.join(jobsDir, "old-49.json")), true, "newer finished records are kept");
+  assert.equal(fs.existsSync(path.join(jobsDir, `${jobId}.json`)), true, "the new job is kept");
 });
 
 test("--resume-last continues the previous session by its id", () => {
@@ -231,6 +367,132 @@ test("a background task is tracked and its result is stored", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Handled the requested task\./);
   assert.match(result.stdout, /Resume in DSH: dst run --session-id /);
+});
+
+test("cancel stops an active background job, its worker, and the dst runner", async (t) => {
+  const { repo, env } = setup("hang");
+  const { jobId, runnerPid } = await launchRunningBackgroundTask({ repo, env });
+  t.after(() => killProcessGroupBestEffort(runnerPid));
+
+  const cancel = run("node", [SCRIPT, "cancel", jobId, "--json"], { cwd: repo, env });
+  assert.equal(cancel.status, 0, cancel.stderr);
+  const payload = JSON.parse(cancel.stdout);
+  assert.equal(payload.status, "cancelled");
+  assert.equal(payload.processesStopped, true);
+
+  await waitFor(() => pidGone(runnerPid));
+
+  const status = run("node", [SCRIPT, "status", jobId, "--json"], { cwd: repo, env });
+  assert.equal(status.status, 0, status.stderr);
+  const job = JSON.parse(status.stdout).job;
+  assert.equal(job.status, "cancelled");
+  assert.equal(job.pid, null);
+  assert.equal(job.runnerPid, null);
+});
+
+test("cancel escalates to SIGKILL when the dst runner ignores SIGTERM", async (t) => {
+  const { repo, env } = setup("ignore-term");
+  const { jobId, runnerPid } = await launchRunningBackgroundTask({ repo, env });
+  t.after(() => killProcessGroupBestEffort(runnerPid));
+
+  const cancel = run("node", [SCRIPT, "cancel", jobId, "--json"], { cwd: repo, env });
+  assert.equal(cancel.status, 0, cancel.stderr);
+  const payload = JSON.parse(cancel.stdout);
+  assert.equal(payload.status, "cancelled");
+  assert.equal(payload.processesStopped, true, "a SIGTERM-swallowing runner is still stopped (SIGKILL)");
+
+  await waitFor(() => pidGone(runnerPid));
+});
+
+test("cancel stops a runner started through a differently named DSH_COMPANION_BIN", async (t) => {
+  const { repo, env } = setup("hang", { dstName: "deepseek" });
+  const { jobId, runnerPid } = await launchRunningBackgroundTask({ repo, env });
+  t.after(() => killProcessGroupBestEffort(runnerPid));
+
+  // The job records the command the runner was actually started with; matching against a
+  // hard-coded `dst` would report "stopped" without stopping anything.
+  const status = run("node", [SCRIPT, "status", jobId, "--json"], { cwd: repo, env });
+  assert.equal(status.status, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).job.runnerCommand, "deepseek");
+
+  const cancel = run("node", [SCRIPT, "cancel", jobId, "--json"], { cwd: repo, env });
+  assert.equal(cancel.status, 0, cancel.stderr);
+  assert.equal(JSON.parse(cancel.stdout).processesStopped, true);
+
+  await waitFor(() => pidGone(runnerPid));
+});
+
+test("session end stops this session's jobs, leaves a tombstone, and keeps other sessions", async (t) => {
+  const { repo, env } = setup("hang");
+  const sessionEnv = { ...env, DSH_COMPANION_SESSION_ID: "sess-current" };
+  const { jobId, runnerPid } = await launchRunningBackgroundTask({ repo, env: sessionEnv });
+  t.after(() => killProcessGroupBestEffort(runnerPid));
+
+  const jobsDir = path.join(resolveStateDir(repo), "jobs");
+  fs.writeFileSync(
+    path.join(jobsDir, "task-other.json"),
+    JSON.stringify({
+      id: "task-other",
+      status: "completed",
+      title: "DSH Task",
+      sessionId: "sess-other",
+      createdAt: "2026-03-18T15:34:00.000Z",
+      updatedAt: "2026-03-18T15:35:00.000Z"
+    })
+  );
+
+  const hook = run("node", [SESSION_HOOK, "SessionEnd"], {
+    cwd: repo,
+    env: sessionEnv,
+    input: JSON.stringify({ hook_event_name: "SessionEnd", session_id: "sess-current", cwd: repo })
+  });
+  assert.equal(hook.status, 0, hook.stderr);
+
+  await waitFor(() => pidGone(runnerPid));
+
+  assert.equal(fs.existsSync(path.join(jobsDir, `${jobId}.json`)), false, "the session's job record is removed");
+  assert.equal(fs.existsSync(path.join(jobsDir, `${jobId}.cancelled`)), true, "the cancel tombstone is kept");
+  assert.equal(fs.existsSync(path.join(jobsDir, "task-other.json")), true, "another session's job is untouched");
+});
+
+test("a worker whose record was removed after a cancel marker still stops itself", async () => {
+  const { repo } = setup();
+  const jobsDir = path.join(resolveStateDir(repo), "jobs");
+  fs.mkdirSync(jobsDir, { recursive: true });
+  const jobId = "task-raced";
+  // SessionEnd's order is: mark first, then remove the record. A worker that only enforced the
+  // marker after finding the file (or that resurrected the record) would run past the cancel.
+  fs.writeFileSync(resolveCancelMarkerFile(repo, jobId), `${new Date().toISOString()}\n`, "utf8");
+
+  const child = spawn(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `
+        const { createJobProgressUpdater } = await import(${JSON.stringify(
+          path.join(PLUGIN_ROOT, "scripts", "lib", "tracked-jobs.mjs")
+        )});
+        const { resolveWorkspaceRoot } = await import(${JSON.stringify(
+          path.join(PLUGIN_ROOT, "scripts", "lib", "workspace.mjs")
+        )});
+        const updater = createJobProgressUpdater(resolveWorkspaceRoot(process.cwd()), ${JSON.stringify(jobId)});
+        updater({ message: "DSH process started (pid 424242).", phase: "starting", runnerPid: 424242 });
+        setTimeout(() => process.exit(0), 5000);
+      `
+    ],
+    { cwd: repo, stdio: "ignore" }
+  );
+
+  const [, signal] = await new Promise((resolve) => {
+    child.on("exit", (code, exitSignal) => resolve([code, exitSignal]));
+  });
+  assert.equal(signal, "SIGTERM", "the worker enforces the cancel marker on itself");
+  assert.equal(
+    fs.existsSync(path.join(jobsDir, `${jobId}.json`)),
+    false,
+    "the tombstone does not resurrect the removed record"
+  );
 });
 
 test("a failed JSON result fails the task with DSH's error code and message", () => {
@@ -295,6 +557,9 @@ test("no file in the plugin still refers to Pi or OpenCode", () => {
         stack.push(full);
       } else {
         const content = fs.readFileSync(full, "utf8");
+        // NOTICE is excluded because it is the provenance statement: it must name
+        // openai/codex-plugin-cc and the opencode plugin whose job-tracking structure dsh
+        // reuses. Every other file must speak DSH only.
         if ((/opencode/i.test(content) || /\bpi\b/i.test(content)) && entry.name !== "NOTICE") {
           offenders.push(path.relative(PLUGIN_ROOT, full));
         }

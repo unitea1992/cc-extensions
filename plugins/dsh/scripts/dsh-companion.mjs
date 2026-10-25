@@ -266,6 +266,11 @@ async function executeTaskRun(request) {
   const workspaceRoot = resolveWorkspaceRoot(request.cwd);
   ensureDshAvailable(request.cwd);
 
+  // The task-worker replays a stored request; apply the same flag rules as a fresh invocation.
+  if (request.permissionMode && (request.write || request.readOnly)) {
+    throw new Error("Choose either --permission-mode or --write/--read-only.");
+  }
+
   const taskMetadata = buildTaskRunMetadata({
     prompt: request.prompt,
     resumeLast: request.resumeLast
@@ -432,6 +437,12 @@ async function handleTask(argv) {
   if (write && readOnly) {
     throw new Error("Choose either --write or --read-only.");
   }
+  // --permission-mode picks the whole permission level by itself; letting it combine with
+  // --write/--read-only would silently drop one side (a read-only request plus
+  // --permission-mode danger-full-access must not quietly run with write access).
+  if (permissionMode && (write || readOnly)) {
+    throw new Error("Choose either --permission-mode or --write/--read-only.");
+  }
   const taskMetadata = buildTaskRunMetadata({ prompt, resumeLast });
 
   if (!prompt && !resumeLast) {
@@ -585,12 +596,16 @@ function handleCancel(argv) {
   const existing = fs.existsSync(jobFile) ? readJobFileRaw(jobFile) : {};
   const job = { ...resolvedJob, pid: existing.pid ?? resolvedJob.pid ?? null };
   const runnerPid = existing.runnerPid ?? job.runnerPid ?? null;
+  // Match the runner against the command it was actually started with: DSH_COMPANION_BIN may
+  // replace `dst` with a differently named launcher, and a wrong name would report "stopped"
+  // while the real process kept running.
+  const runnerCommand = existing.runnerCommand ?? job.runnerCommand ?? "dst";
 
   // Stop the worker first so it cannot record the interrupted run as failed, then make sure the
   // DSH process group (which owns the commands it started) is gone as well. The two processes
   // carry different command names, so each is matched against its own expected command.
   const workerStop = stopProcessGroup(job.pid ?? Number.NaN, { expectCommand: "dsh-companion" });
-  const runnerStop = stopProcessGroup(runnerPid ?? Number.NaN, { expectCommand: "dst" });
+  const runnerStop = stopProcessGroup(runnerPid ?? Number.NaN, { expectCommand: runnerCommand });
   if (runnerStop.attempted) {
     appendLogLine(
       job.logFile,
