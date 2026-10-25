@@ -4,6 +4,11 @@
 プラグインの版はそろえて上げます。
 版の上げ方は [CONTRIBUTING.md の「版の管理」](CONTRIBUTING.md#版の管理) を参照してください。
 
+## 0.5.0
+
+- DSH（DeepSeek Harness）を Claude Code から呼ぶ `dsh` プラグインを追加した。`/dsh:rescue`、`/dsh:status`、`/dsh:result`、`/dsh:cancel`、`/dsh:setup` を収録している。ジョブごとに `dst run --json` を起動し、モデルと推論量（effort）は同梱のパッチが `DSH_LAUNCH_PROVIDER` / `DSH_LAUNCH_MODEL` / `DSH_LAUNCH_EFFORT` 環境変数から渡す。読み取り専用（`--permission-mode read-only`）、再開（`--session-id`）、バックグラウンド実行、実行時間の上限（`--timeout`）に対応する。
+- `opencode`・`pi`・`typescript7-lsp` の中身は変わらない。版をそろえて管理するため、版だけを上げた。
+
 ## 0.4.2
 
 - 読み取り専用の実行でも Web 検索を使えるようにした（#17）。Pi は `--tools read,grep,find,ls` をやめて `--exclude-tools edit,write,bash,powershell` で書き換えとコマンドの道具だけを外し、OpenCode は `webfetch`・`websearch` を許す。`pi-rescue`・`opencode-rescue` は、書き換えのない調べものも書き込みありで流す。

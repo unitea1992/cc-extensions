@@ -1,10 +1,11 @@
 # cc-extensions
 
 Claude Code 用のプラグインマーケットプレイスです。
-次の3つのプラグインを収録しています。
+次の4つのプラグインを収録しています。
 
 - `opencode`：Claude Code から OpenCode にレビューや作業を任せる
 - `pi`：Claude Code から Pi に調査や修正を任せる
+- `dsh`：Claude Code から DSH（DeepSeek Harness）に調査や修正を任せる
 - `typescript7-lsp`：TypeScript 7 のリポジトリで Claude Code の LSP ツールを使えるようにする
 
 ## opencode プラグイン
@@ -325,6 +326,90 @@ Pi はジョブごとに `pi --print --mode json` で起動し、終わったら
 前回の作業を Pi 側の画面で続けたいときは、結果に表示される `pi --session <id>` を使います。
 
 出力が `--idle-timeout`（既定600秒）の間止まったら、実行を止めて失敗として返します。
+
+## dsh プラグイン
+
+Claude Code から DSH（DeepSeek Harness。`dst` コマンドで動くコーディングエージェント）に調査や修正を任せるプラグインです。
+`/opencode:rescue` と同じ形で、`dsh:dsh-rescue` サブエージェント、バックグラウンド実行、結果の受け取り、前回の作業の再開が使えます。
+レビューのコマンドはありません。
+DSH のセッションには TinyFish の MCP（Web 検索・本文取得。無料）が入っているので、調べものの依頼でも DSH 側で Web を引けます。
+
+### できること
+
+- `/dsh:rescue`：調査や修正を DSH に任せる
+- `/dsh:status`、`/dsh:result`、`/dsh:cancel`：バックグラウンドジョブの確認、結果の表示、中止
+- `/dsh:setup`：DSH（`dst`）の有無と使えるモデル一覧の確認
+
+### 必要なもの
+
+- **DSH**（`dst run --json` が使える版。dsh-tui 0.17.0／ランタイム 0.2.1-rc.2 で動作確認）
+- DSH で使えるモデル（`~/.dsh` のプロファイルと認証情報。logfare の `glm-5.3` と `glm-5.3-flash` で動作確認）
+- **Node.js 18.18 以上**
+
+### 導入
+
+マーケットプレイスを追加していなければ、先に追加します（手順は opencode プラグインの「導入」と同じです）。
+
+```bash
+/plugin install dsh@cc-extensions
+/reload-plugins
+/dsh:setup
+```
+
+### 使い方
+
+```bash
+/dsh:rescue テストが落ちる原因を調べて
+/dsh:rescue --background 不安定なテストを調査して
+/dsh:rescue --model logfare/glm-5.3 --effort high 最小限の修正で直して
+/dsh:rescue --resume 一番重要な修正を適用して
+```
+
+- `--background` / `--wait`、`--resume` / `--fresh` は `/opencode:rescue` と同じ意味です。
+- `--model provider/model`：DSH のモデルを指定します。
+  DSH には既定のモデルがない環境が多いので、通常は指定します。
+  利用できるモデルは `/dsh:setup` で確認できます。
+  モデル名自身に `/` が含まれる場合（`openrouter/minimax/…:free` など）は、最初の `/` までがプロバイダーです。
+- `--effort <段階>`：モデルの推論量を選びます。
+  候補はモデルごとに違い（例：logfare の `glm-5.3` は `low`・`high`・`max`）、対応しない値は DSH の起動検証（UNSUPPORTED_REASONING_EFFORT）で止まるため、結果に表示されるエラーで確認してください。
+- `--write` / `--read-only`：既定では書き込みありで実行します。
+  読み取り専用にしたいときは、その旨を依頼文に書いてください。
+- `--permission-mode <mode>`：DSH の権限を直接選びます（`read-only`、`workspace-write`、`danger-full-access`）。
+- `--timeout <秒>`：DSH の実行時間の上限。既定は無制限で、超えたら dst の終了コード 124 として失敗を返します。
+
+前回の作業を DSH 側の画面で続けたいときは、結果に表示される `dst run --session-id <id>` を使います。
+
+他のセッションから直接呼ぶときは、opencode と同じく companion スクリプトを使います。
+
+```bash
+DS=$(ls ~/.claude/plugins/cache/cc-extensions/dsh/*/scripts/dsh-companion.mjs | tail -n 1)
+node "$DS" task --background --write --model logfare/glm-5.3 --prompt-file /path/to/prompt.md --json
+node "$DS" status <jobId> --wait --timeout-ms 540000 --json
+node "$DS" result <jobId>
+```
+
+### 権限について
+
+DSH には権限の段階として `read-only`・`workspace-write`・`danger-full-access` があります。
+既定（`--write`）の実行は `workspace-write` で、作業ディレクトリの中への書き込みは許可され、外への書き込みは DSH の承認規則に従います。
+読み取り専用の実行は `--permission-mode read-only` で、ファイルの変更もコマンドもできません。
+作業ディレクトリの外にも書かせたいときは、`--permission-mode danger-full-access` を明示的に指定してください。
+この制限は DSH の権限設定によるもので、プラグインが利用者の DSH 設定や認証情報を書き換えることはありません。
+
+### 実行のしかた
+
+DSH はジョブごとに `dst run --json` で起動し、終わったら止まります。
+常駐するプロセスは残りません。
+指示文は標準入力で渡すので、長さの上限はありません。
+
+headless の `dst run` に `--profile dsh-tui` を渡すと固まるため、プロバイダーの定義は `--patch ~/.dsh/profiles/dsh-tui/cordis.patch.yml` で重ねて渡します（ファイルがなければ渡しません）。
+モデルと推論量は、プラグイン同梱のパッチ（`scripts/patches/agent-model.yml`）が `DSH_LAUNCH_PROVIDER`・`DSH_LAUNCH_MODEL`・`DSH_LAUNCH_EFFORT` 環境変数から受け取ります。
+`--provider` / `--model` フラグは effort を落としてしまうため、プラグインでは使いません。
+`--model` を省略した場合、環境変数に `DSH_LAUNCH_PROVIDER` と `DSH_LAUNCH_MODEL` があればそれを、なければ DSH の既定のモデルを使います。
+
+出力は1行の JSON（`ok`・`sessionId`・`text` / `error`）で、`/dsh:result` にはこの最終応答がそのまま表示されます。
+新しいセッションの ID は DSH が決め、`--resume` ではその ID を `--session-id` で開きます。
+`--timeout` を過ぎると dst が終了コード 124 で止まるため、失敗として返します。
 
 ## typescript7-lsp プラグイン
 

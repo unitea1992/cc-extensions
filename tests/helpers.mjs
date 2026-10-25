@@ -6,7 +6,24 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 
 // Tests must never read or write the state of a real Claude Code session that happens to run them.
-for (const name of ["CLAUDE_PLUGIN_DATA", "OPENCODE_COMPANION_DATA", "OPENCODE_COMPANION_SESSION_ID", "CLAUDE_ENV_FILE", "OPENCODE_CONFIG_CONTENT", "PI_COMPANION_DATA", "PI_COMPANION_SESSION_ID", "PI_COMPANION_BIN"]) {
+for (const name of [
+  "CLAUDE_PLUGIN_DATA",
+  "OPENCODE_COMPANION_DATA",
+  "OPENCODE_COMPANION_SESSION_ID",
+  "CLAUDE_ENV_FILE",
+  "OPENCODE_CONFIG_CONTENT",
+  "PI_COMPANION_DATA",
+  "PI_COMPANION_SESSION_ID",
+  "PI_COMPANION_BIN",
+  "DSH_COMPANION_DATA",
+  "DSH_COMPANION_SESSION_ID",
+  "DSH_COMPANION_BIN",
+  "DSH_COMPANION_PROFILE_PATCH",
+  "DSH_COMPANION_TIMEOUT_SECONDS",
+  "DSH_LAUNCH_PROVIDER",
+  "DSH_LAUNCH_MODEL",
+  "DSH_LAUNCH_EFFORT"
+]) {
   delete process.env[name];
 }
 // A temporary HOME keeps the companion from finding a real OpenCode install in ~/.opencode/bin.

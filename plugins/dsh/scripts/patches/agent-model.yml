@@ -1,0 +1,19 @@
+# dst run / dsh headless で、agent-default-model（既定のモデルと推論量）を環境変数から指定する
+# プラグイン同梱のパッチ。
+#
+# 使い方（dsh-companion が自動的に行う）:
+#   DSH_LAUNCH_PROVIDER=logfare DSH_LAUNCH_MODEL=glm-5.3 DSH_LAUNCH_EFFORT=high \
+#     dst run --patch <プロファイルの cordis.patch.yml> \
+#             --patch <このファイル> "タスク文" --json
+#
+# - provider と model は必須。未設定のままだと起動時の検証エラーで止まる。
+# - DSH_LAUNCH_EFFORT は省略可（そのモデルの既定の推論量になる）。
+#   指定できる値はモデルごとに違い（例: logfare の glm-5.3 は low / high / max）、
+#   無効な値は起動が UNSUPPORTED_REASONING_EFFORT で止まる。
+# - --provider / --model フラグを同時に渡すと、フラグ側の1回限りの上書きが
+#   このパッチより後で効き、effort は落ちる。effort を使うときはフラグを渡さない。
+- id: agent-default-model
+  config:
+    provider: !!js process.env.DSH_LAUNCH_PROVIDER ?? undefined
+    model: !!js process.env.DSH_LAUNCH_MODEL ?? undefined
+    reasoningEffort: !!js process.env.DSH_LAUNCH_EFFORT ?? undefined
