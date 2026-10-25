@@ -12,6 +12,7 @@ npm test
 テストでは OpenCode を偽の実行ファイル（`tests/fake-opencode-fixture.mjs`）に置き換えます。
 偽の実行ファイルは OpenCode と同じ規則で権限を判定する（後に書いた規則が優先され、`*` はワイルドカード）ので、読み取り専用エージェントで書き込みが拒否されることを自動テストで確かめられます。
 pi プラグインの試験も、Pi を偽の実行ファイル（`tests/fake-pi-fixture.mjs`）に置き換えて動かします。
+dsh プラグインの試験も同様に、DSH を偽の `dst` 実行ファイル（`tests/fake-dst-fixture.mjs`）に置き換えて動かします。
 
 ## 版の管理
 
