@@ -6,11 +6,13 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-  parseInvocation, summarizeTask, dispatchKey, readCache, writeCache, status
+  parseInvocation, summarizeTask, fitToTokenBudget, dispatchKey, readCache, writeCache,
+  routeTask, status
 } from "../plugins/decision-router/scripts/decision-router.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HOOK = path.join(ROOT, "plugins/decision-router/scripts/pretool-hook.mjs");
+const TRIM_MARKER = "…（中略）…";
 
 function makeProvider(dir) {
   const bin = path.join(dir, "fake-d1-route");
@@ -22,6 +24,11 @@ if (process.env.FAKE_ARGV) fs.writeFileSync(process.env.FAKE_ARGV, JSON.stringif
 if (process.env.FAKE_FAIL === "1") process.exit(1);
 if (process.env.FAKE_SLEEP) { const end = Date.now() + Number(process.env.FAKE_SLEEP); while (Date.now() < end) {} }
 const task = argv[argv.indexOf("--task") + 1];
+const maxChars = Number(process.env.FAKE_MAX_TASK_CHARS || 0);
+if (maxChars && Array.from(task).length > maxChars) {
+  console.log(JSON.stringify({ ok: false, reason: "HTTPError" }));
+  process.exit(1);
+}
 const mode = process.env.FAKE_MODE || "ok";
 if (mode === "missing-agent") console.log(JSON.stringify({ ok: true, kind: "routine", effort: "low", risk: "low" }));
 else if (mode === "bad-json") console.log("not json");
@@ -35,18 +42,36 @@ else console.log(JSON.stringify({ ok: true, kind: "routine", effort: "low", risk
   return bin;
 }
 
+function makeTokenizer(dir) {
+  const bin = path.join(dir, "fake-tokenize");
+  fs.writeFileSync(bin, `#!/usr/bin/env node
+const fs = require("fs");
+if (process.env.FAKE_TOKENIZE_CALLS) fs.appendFileSync(process.env.FAKE_TOKENIZE_CALLS, "call\\n");
+if (process.env.FAKE_TOKENIZE_FAIL === "1") process.exit(1);
+const text = fs.readFileSync(0, "utf8");
+const ratio = Number(process.env.FAKE_TOKENIZE_RATIO || "0.55");
+console.log(JSON.stringify({ tokens: Math.ceil(Array.from(text).length * ratio) }));
+`, { mode: 0o755 });
+  return bin;
+}
+
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "decision-router-test-"));
   const bin = makeProvider(dir);
+  const tokenizer = makeTokenizer(dir);
   const calls = path.join(dir, "calls.log");
+  const tokenCalls = path.join(dir, "tokenize-calls.log");
   const env = { ...process.env, DECISION_ROUTER_PROVIDER_BIN: bin,
-    DECISION_ROUTER_CACHE_DIR: path.join(dir, "cache"), FAKE_CALLS: calls };
+    DECISION_ROUTER_TOKENIZE_BIN: tokenizer,
+    DECISION_ROUTER_CACHE_DIR: path.join(dir, "cache"),
+    FAKE_CALLS: calls, FAKE_TOKENIZE_CALLS: tokenCalls };
   delete env.NODE_OPTIONS;
+  delete env.DECISION_ROUTER_TOKENIZER_URL;
   const run = (event, extra = {}, timeout = 3000) => spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify(event), encoding: "utf8", timeout, env: { ...env, ...extra }
   });
   const dispose = () => fs.rmSync(dir, { recursive: true, force: true });
-  return { dir, bin, calls, env, run, dispose };
+  return { dir, bin, tokenizer, calls, tokenCalls, env, run, dispose };
 }
 
 function event(command, session = "s1", cwd = "/tmp") {
@@ -62,7 +87,24 @@ function cachedFiles(env) {
   return fs.existsSync(dir) ? fs.readdirSync(dir).map((name) => path.join(dir, name)) : [];
 }
 
+function taskArgument(f) {
+  const argv = JSON.parse(fs.readFileSync(path.join(f.dir, "argv.json"), "utf8"));
+  return argv[argv.indexOf("--task") + 1];
+}
+
+function reasonOf(result) {
+  return JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason;
+}
+
+function assertFailOpen(result) {
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.hookSpecificOutput, undefined);
+  assert.match(output.systemMessage, /fail-open/);
+}
+
 const ADVICE = { ok: true, kind: "routine", suggested_agent: "pi", effort: "low", risk: "low" };
+const BUDGET = 357;
 
 test("finds a dispatch, ignoring quoted or unrelated mentions", () => {
   assert.equal(parseInvocation("orca-worker-start --name fix-ui --reason 'small UI fix'").name, "fix-ui");
@@ -111,8 +153,6 @@ test("uses spec text without executing shell substitutions", () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-// summarizeTask is imported above for the spec-file test.
-
 test("first dispatch is denied once with advice, retry is allowed", () => {
   const f = fixture();
   try {
@@ -152,13 +192,12 @@ test("changed spec content is a different Dispatch and a retry is cached", () =>
   } finally { f.dispose(); }
 });
 
-test("provider responses outside the known contract fail open", () => {
+test("provider responses outside the known contract fail open with a notice", () => {
   const f = fixture();
   try {
     for (const mode of ["missing-agent", "bad-json", "unknown-kind", "secret-agent", "newline-agent"]) {
       const result = f.run(event("orca-worker-start --name x --reason task"), { FAKE_MODE: mode });
-      assert.equal(result.status, 0, result.stderr);
-      assert.equal(result.stdout.trim(), "", mode);
+      assertFailOpen(result);
     }
     assert.deepEqual(cachedFiles(f.env), []);
     const valid = f.run(event("orca-worker-start --name codex --reason task"), { FAKE_MODE: "high-risk" });
@@ -166,14 +205,23 @@ test("provider responses outside the known contract fail open", () => {
   } finally { f.dispose(); }
 });
 
-test("provider failure, timeout, unrelated tools and malformed input fail open", () => {
+test("a missing provider stays silent, other failures show a fail-open notice", () => {
   const f = fixture();
   try {
-    assert.equal(f.run(event("orca-worker-start --name fix-a --reason task"), { FAKE_FAIL: "1" }).stdout.trim(), "");
+    const missing = f.run(event("orca-worker-start --name fix-a --reason task"),
+      { DECISION_ROUTER_PROVIDER_BIN: path.join(f.dir, "no-such-d1") });
+    assert.equal(missing.status, 0, missing.stderr);
+    assert.equal(missing.stdout.trim(), "");
+    assertFailOpen(f.run(event("orca-worker-start --name fix-a --reason task"), { FAKE_FAIL: "1" }));
+  } finally { f.dispose(); }
+});
+
+test("provider timeout, unrelated tools and malformed input fail open", () => {
+  const f = fixture();
+  try {
     const started = Date.now();
     const timeout = f.run(event("orca-worker-start --name slow --reason task"), { FAKE_SLEEP: "7000" }, 9000);
-    assert.equal(timeout.status, 0, timeout.stderr);
-    assert.equal(timeout.stdout.trim(), "");
+    assertFailOpen(timeout);
     assert.ok(Date.now() - started < 8000);
     assert.equal(f.run(event("echo hi")).stdout.trim(), "");
     for (const tool of ["Edit", "Write"]) {
@@ -188,26 +236,106 @@ test("provider failure, timeout, unrelated tools and malformed input fail open",
   } finally { f.dispose(); }
 });
 
-test("a long instruction is trimmed, marked, and never judged low risk", () => {
+test("short input within the byte bound skips the tokenizer", () => {
   const f = fixture();
   try {
-    const long = "あ".repeat(20_000);
-    const argvFile = path.join(f.dir, "argv.json");
-    const command = "orca-worker-start --name long --reason '" + long + "'";
-    const result = f.run(event(command), { FAKE_ARGV: argvFile });
+    const result = f.run(event("orca-worker-start --name tiny --reason 'fix typo'"));
+    assert.match(result.stdout, /"deny"/);
+    assert.equal(callCount(f.tokenCalls), 0);
+    assert.equal(callCount(f.calls), 1);
+  } finally { f.dispose(); }
+});
+
+test("a whitespace-only instruction is not sent to the provider", () => {
+  const f = fixture();
+  try {
+    const result = f.run(event("orca-worker-start --name ws --reason '   '"));
     assert.equal(result.status, 0, result.stderr);
-    const reason = JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason;
+    assert.equal(result.stdout.trim(), "");
+    assert.equal(callCount(f.calls), 0);
+  } finally { f.dispose(); }
+});
+
+test("a long instruction is trimmed to the measured token budget, keeping both ends", () => {
+  const f = fixture();
+  try {
+    const long = "HEAD\n" + "あ".repeat(20_000) + "\nTAIL";
+    const command = "orca-worker-start --name long --reason '" + long + "'";
+    const result = f.run(event(command), { FAKE_ARGV: path.join(f.dir, "argv.json"), FAKE_MAX_TASK_CHARS: "700" });
+    assert.equal(result.status, 0, result.stderr);
+    const reason = reasonOf(result);
     assert.match(reason, /input_truncated=true/);
     assert.match(reason, /risk=medium/);
     assert.doesNotMatch(reason, /risk=low/);
-    assert.match(reason, /切り詰め/);
-    const argv = JSON.parse(fs.readFileSync(argvFile, "utf8"));
-    const task = argv[argv.indexOf("--task") + 1];
-    assert.equal(task.length, 3_000);
-    assert.equal(task, "あ".repeat(3_000));
+    assert.match(reason, /トークン上限/);
+    assert.match(reason, /途中の条件/);
+    const task = taskArgument(f);
+    assert.ok(task.startsWith("HEAD"), task.slice(0, 40));
+    assert.ok(task.endsWith("TAIL"), task.slice(-40));
+    assert.ok(task.includes(TRIM_MARKER));
+    assert.ok(Math.ceil(Array.from(task).length * 0.55) <= BUDGET);
+    assert.equal(callCount(f.tokenCalls) >= 1, true);
     assert.equal(f.run(event(command)).stdout.trim(), "");
     const high = f.run(event("orca-worker-start --name long-high --reason '" + long + "'"), { FAKE_MODE: "high-risk" });
-    assert.match(JSON.parse(high.stdout).hookSpecificOutput.permissionDecisionReason, /risk=high/);
+    assert.match(reasonOf(high), /risk=high/);
+  } finally { f.dispose(); }
+});
+
+test("wide characters are trimmed by tokens, not by a fixed character count", () => {
+  const f = fixture();
+  try {
+    const command = "orca-worker-start --name wide --reason '" + "𠮟".repeat(600) + "'";
+    const result = f.run(event(command), { FAKE_ARGV: path.join(f.dir, "argv.json"),
+      FAKE_TOKENIZE_RATIO: "4", FAKE_MAX_TASK_CHARS: "90" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(reasonOf(result), /input_truncated=true/);
+    const task = taskArgument(f);
+    assert.ok(Array.from(task).length <= 90, String(Array.from(task).length));
+    assert.ok(Math.ceil(Array.from(task).length * 4) <= BUDGET);
+  } finally { f.dispose(); }
+});
+
+test("input that fits the token budget is not marked truncated", () => {
+  const f = fixture();
+  try {
+    const body = "word ".repeat(200);
+    const result = f.run(event("orca-worker-start --name fits --reason '" + body + "'"),
+      { FAKE_ARGV: path.join(f.dir, "argv.json"), FAKE_TOKENIZE_RATIO: "0.25" });
+    assert.equal(result.status, 0, result.stderr);
+    const reason = reasonOf(result);
+    assert.doesNotMatch(reason, /input_truncated=true/);
+    assert.match(reason, /risk=low/);
+    assert.equal(taskArgument(f), body);
+  } finally { f.dispose(); }
+});
+
+test("an unreachable tokenizer falls back to a guaranteed byte budget", () => {
+  const f = fixture();
+  try {
+    const long = "あ".repeat(3_000);
+    const result = f.run(event("orca-worker-start --name bytes --reason '" + long + "'"),
+      { FAKE_ARGV: path.join(f.dir, "argv.json"), FAKE_TOKENIZE_FAIL: "1", FAKE_MAX_TASK_CHARS: "121" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(reasonOf(result), /input_truncated=true/);
+    const task = taskArgument(f);
+    assert.ok(Buffer.byteLength(task, "utf8") <= BUDGET);
+    assert.ok(task.includes(TRIM_MARKER));
+  } finally { f.dispose(); }
+});
+
+test("high-risk terms in a dropped middle still raise risk and effort", () => {
+  const f = fixture();
+  try {
+    const long = "HEAD\n" + "本番にデプロイして課金を止める\n" + "あ".repeat(3_000) + "\nTAIL";
+    const result = f.run(event("orca-worker-start --name danger --reason '" + long + "'"),
+      { FAKE_MAX_TASK_CHARS: "700" });
+    assert.equal(result.status, 0, result.stderr);
+    const reason = reasonOf(result);
+    assert.match(reason, /risk=high/);
+    assert.match(reason, /effort=high/);
+    assert.match(reason, /high_risk_input=true/);
+    assert.match(reason, /input_truncated=true/);
+    assert.doesNotMatch(reason, /risk=low/);
   } finally { f.dispose(); }
 });
 
@@ -216,8 +344,7 @@ test("unreadable or oversized spec input is incomplete and never low risk", () =
   try {
     const cwd = f.dir;
     const missing = "orca-worker-start --name spec-missing --reason 'simple task' --spec-file missing.md";
-    const missingReason = JSON.parse(f.run(event(missing, "s1", cwd)).stdout)
-      .hookSpecificOutput.permissionDecisionReason;
+    const missingReason = reasonOf(f.run(event(missing, "s1", cwd)));
     assert.match(missingReason, /input_incomplete=true/);
     assert.match(missingReason, /risk=medium/);
     assert.doesNotMatch(missingReason, /risk=low/);
@@ -226,11 +353,11 @@ test("unreadable or oversized spec input is incomplete and never low risk", () =
 
     fs.writeFileSync(path.join(cwd, "big.md"), "x".repeat(70_000));
     const big = f.run(event("orca-worker-start --name spec-big --reason task --spec-file big.md", "s1", cwd));
-    assert.match(JSON.parse(big.stdout).hookSpecificOutput.permissionDecisionReason, /input_incomplete=true/);
+    assert.match(reasonOf(big), /input_incomplete=true/);
 
     fs.mkdirSync(path.join(cwd, "adir"));
     const directory = f.run(event("orca-worker-start --name spec-dir --reason task --spec-file adir", "s1", cwd));
-    assert.match(JSON.parse(directory.stdout).hookSpecificOutput.permissionDecisionReason, /input_incomplete=true/);
+    assert.match(reasonOf(directory), /input_incomplete=true/);
   } finally { f.dispose(); }
 });
 
@@ -316,4 +443,17 @@ test("dispatch key ignores model and effort and includes instruction content", (
   assert.equal(dispatchKey(event("abc"), invocation), dispatchKey(event("different text"), invocation));
   const withText = { ...invocation, title: "T", reason: "R" };
   assert.notEqual(dispatchKey(event("same"), invocation), dispatchKey(event("same"), withText));
+});
+
+// Requires the real local d1 service; run with DECISION_ROUTER_TEST_LOCAL=1.
+test("real local d1 accepts the measured token budget", {
+  skip: process.env.DECISION_ROUTER_TEST_LOCAL !== "1"
+}, () => {
+  const text = "READMEの誤字を修正する。".repeat(200).slice(0, 3000);
+  const fitted = fitToTokenBudget(text, process.env);
+  assert.equal(fitted.truncated, true);
+  assert.ok(fitted.text.length < text.length);
+  const advice = routeTask(fitted.text, process.env);
+  assert.ok(advice, "expected advice from the real d1 service");
+  assert.ok(["routine", "implementation", "investigation", "visual", "critical"].includes(advice.kind));
 });
