@@ -4,6 +4,11 @@
 プラグインの版はそろえて上げます。
 版の上げ方は [CONTRIBUTING.md の「版の管理」](CONTRIBUTING.md#版の管理) を参照してください。
 
+## 0.5.1
+
+- Claude Codeの新規Orca Dispatch直前にローカル判断モデルへ問い合わせる `decision-router` プラグインを追加。Bashの`orca-worker-start`を検知し、最初の起動を一度停止して分類・effort・リスクの助言を返す。同一Dispatchの再試行はキャッシュで通す。モデル停止・異常時は従来どおり続行する。
+- 既存の4プラグインは内容を変更せず、マーケットプレイスの共通版数だけ更新。
+
 ## 0.5.0
 
 - DSH（DeepSeek Harness）を Claude Code から呼ぶ `dsh` プラグインを追加した（#18）。`/dsh:rescue`、`/dsh:status`、`/dsh:result`、`/dsh:cancel`、`/dsh:setup` を収録している。ジョブごとに `dst run --json` を起動し、モデルと推論量（effort）は同梱のパッチが `DSH_LAUNCH_PROVIDER` / `DSH_LAUNCH_MODEL` / `DSH_LAUNCH_EFFORT` 環境変数から渡す。読み取り専用（`--permission-mode read-only`）、再開（`--session-id`）、バックグラウンド実行、実行時間の上限（`--timeout`）に対応する。

@@ -1,11 +1,12 @@
 # cc-extensions
 
 Claude Code 用のプラグインマーケットプレイスです。
-次の4つのプラグインを収録しています。
+次の5つのプラグインを収録しています。
 
 - `opencode`：Claude Code から OpenCode にレビューや作業を任せる
 - `pi`：Claude Code から Pi に調査や修正を任せる
 - `dsh`：Claude Code から DSH（DeepSeek Harness）に調査や修正を任せる
+- `decision-router`：新しいOrca作業者を起動する直前にローカル判断モデルで分類・effortの助言を得る
 - `typescript7-lsp`：TypeScript 7 のリポジトリで Claude Code の LSP ツールを使えるようにする
 
 ## opencode プラグイン
@@ -513,3 +514,15 @@ claude plugin update typescript7-lsp@cc-extensions --scope project
 Apache License 2.0。
 openai/codex-plugin-cc（Copyright 2026 OpenAI、Apache-2.0）を元に変更を加えています。
 変更内容は [NOTICE](NOTICE) を参照してください。
+
+## decision-router プラグイン
+
+`orca-worker-start` による新規作業者の起動をClaude Codeの `PreToolUse` フックで検知し、ローカルの `d1-route` を一度だけ呼び出します。最初の起動を一度保留して分類・effort・リスクの助言をClaudeへ返し、次の再試行は通します。モデルが利用できない場合は従来の作業者起動を妨げません。
+
+```text
+/plugin install decision-router@cc-extensions
+/reload-plugins
+/decision-router:status
+```
+
+モデルのセットアップ、発火条件、対象外の起動経路、停止方法は [decision-routerの説明](plugins/decision-router/README.md) を参照してください。

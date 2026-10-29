@@ -1,0 +1,17 @@
+{
+  "description": "Run the local decision advisor before an Orca worker dispatch.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/pretool-hook.mjs\"",
+            "timeout": 8
+          }
+        ]
+      }
+    ]
+  }
+}
