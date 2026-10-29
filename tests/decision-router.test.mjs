@@ -211,6 +211,29 @@ test("a long instruction is trimmed, marked, and never judged low risk", () => {
   } finally { f.dispose(); }
 });
 
+test("unreadable or oversized spec input is incomplete and never low risk", () => {
+  const f = fixture();
+  try {
+    const cwd = f.dir;
+    const missing = "orca-worker-start --name spec-missing --reason 'simple task' --spec-file missing.md";
+    const missingReason = JSON.parse(f.run(event(missing, "s1", cwd)).stdout)
+      .hookSpecificOutput.permissionDecisionReason;
+    assert.match(missingReason, /input_incomplete=true/);
+    assert.match(missingReason, /risk=medium/);
+    assert.doesNotMatch(missingReason, /risk=low/);
+    assert.match(missingReason, /読み取れない/);
+    assert.equal(f.run(event(missing, "s1", cwd)).stdout.trim(), "");
+
+    fs.writeFileSync(path.join(cwd, "big.md"), "x".repeat(70_000));
+    const big = f.run(event("orca-worker-start --name spec-big --reason task --spec-file big.md", "s1", cwd));
+    assert.match(JSON.parse(big.stdout).hookSpecificOutput.permissionDecisionReason, /input_incomplete=true/);
+
+    fs.mkdirSync(path.join(cwd, "adir"));
+    const directory = f.run(event("orca-worker-start --name spec-dir --reason task --spec-file adir", "s1", cwd));
+    assert.match(JSON.parse(directory.stdout).hookSpecificOutput.permissionDecisionReason, /input_incomplete=true/);
+  } finally { f.dispose(); }
+});
+
 test("cache keeps only validated advice and no task text or secrets", () => {
   const f = fixture();
   try {

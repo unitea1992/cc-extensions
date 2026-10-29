@@ -112,21 +112,21 @@ function option(args, flag) { return allOptions(args, flag)[0] ?? null; }
 
 function taskParts(invocation, cwd) {
   const parts = [invocation.title, invocation.reason].filter(Boolean);
-  let truncated = false;
+  let truncated = false, omitted = false;
   for (const item of invocation.specFiles) {
     try {
       const file = path.resolve(cwd, item);
       const stat = fs.statSync(file);
-      if (!stat.isFile() || stat.size > MAX_SPEC_BYTES) continue;
+      if (!stat.isFile() || stat.size > MAX_SPEC_BYTES) { omitted = true; continue; }
       const text = fs.readFileSync(file, "utf8").trim();
-      if (!text) continue;
+      if (!text) { omitted = true; continue; }
       if (text.length > MAX_TASK_LENGTH) truncated = true;
       parts.push(text.slice(0, MAX_TASK_LENGTH));
-    } catch { /* A missing file is not a dispatch failure. */ }
+    } catch { omitted = true; }
   }
   if (invocation.task) parts.push("Task ID: " + invocation.task);
   if (invocation.followup) parts.push("Follow-up of: " + invocation.followup);
-  return { parts, truncated };
+  return { parts, truncated, omitted };
 }
 
 export function summarizeTask(invocation, cwd) {
@@ -134,9 +134,12 @@ export function summarizeTask(invocation, cwd) {
 }
 
 function summarizeWithMeta(invocation, cwd) {
-  const { parts, truncated } = taskParts(invocation, cwd);
+  const { parts, truncated, omitted } = taskParts(invocation, cwd);
   const text = parts.join("\n\n");
-  return { text: text.slice(0, MAX_TASK_LENGTH), truncated: truncated || text.length > MAX_TASK_LENGTH };
+  return {
+    text: text.slice(0, MAX_TASK_LENGTH), omitted,
+    truncated: truncated || text.length > MAX_TASK_LENGTH
+  };
 }
 
 function specFingerprint(file, cwd) {
@@ -197,19 +200,23 @@ export function preToolDecision(event, env = process.env) {
   if (!summary.text) return null;
   const advice = routeTask(summary.text, env);
   if (!advice) return null;
-  if (summary.truncated && advice.risk === "low") advice.risk = "medium";
+  if (summary.truncated || summary.omitted) {
+    if (advice.risk === "low") advice.risk = "medium";
+  }
   try { writeCache(key, { when: Date.now(), advice }, env); }
   catch { return null; }
   const verdict = "kind=" + advice.kind + ", suggested_agent=" + advice.suggested_agent +
     ", effort=" + advice.effort + ", risk=" + advice.risk +
-    (summary.truncated ? ", input_truncated=true" : "");
+    (summary.truncated ? ", input_truncated=true" : "") +
+    (summary.omitted ? ", input_incomplete=true" : "");
   return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
       permissionDecisionReason: "decision-router: 自動判定を実施しました (" + verdict +
         ")。これは提案であり承認ではありません。ユーザー指定、最新の利用枠、agent-model-check、orca-worker-startの安全検査を優先し、必要なら引数を見直して同じDispatchを再実行してください。再実行では同じ判定を繰り返しません。" +
-        (summary.truncated ? "入力は上限で切り詰めたため、末尾の条件は判定に含まれていません。" : "")
+        (summary.truncated ? "入力は上限で切り詰めたため、末尾の条件は判定に含まれていません。" : "") +
+        (summary.omitted ? "指示書の一部は読み取れないため、判定に含まれていません。" : "")
     }
   };
 }
