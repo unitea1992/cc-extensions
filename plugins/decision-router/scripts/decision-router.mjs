@@ -6,14 +6,21 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const TTL_MS = 30 * 60_000;
-// Measured against the local d1 server (llama-server --ctx-size 4096, one slot): /v1/systemone
-// rejects a rendered prompt above the 512-token physical batch long before the 4096-token
-// context, and d1-route's prefix plus template/questions take a measured 131 tokens. Only the
-// remaining 357 tokens of task text fit, with margin for template or provider changes.
-const PROMPT_TOKEN_LIMIT = 512;
-const FIXED_PROMPT_TOKENS = 131;
-const SAFETY_MARGIN_TOKENS = 24;
-const MAX_TASK_TOKENS = PROMPT_TOKEN_LIMIT - FIXED_PROMPT_TOKENS - SAFETY_MARGIN_TOKENS;
+// llama.cpp reads one d1 question per batch, so /v1/systemone rejects a prompt larger than the
+// server's -b/-ub. The prefix and questions take 131 tokens, measured as the gap between the
+// batch size and the largest accepted prompt (8192 - 8061 on a -b/-ub 8192 server), so a stock
+// -ub 512 server leaves 512 - 131 - 24 = 357 tokens of task text. Raising the server's batch
+// flags makes longer inputs possible; raise this with it. Measured with the real d1-route
+// payload: 1100 tokens of task text 2.6s, 1400 3.1s, 1700 3.9s, against the 4s hook budget
+// shared with the tokenizer round trips.
+const DEFAULT_MAX_TASK_TOKENS = 357;
+const MAX_TASK_TOKENS_CEILING = 4_096;
+
+function maxTaskTokens(env) {
+  const raw = Number(env?.DECISION_ROUTER_MAX_TASK_TOKENS);
+  if (!Number.isInteger(raw) || raw < 64 || raw > MAX_TASK_TOKENS_CEILING) return DEFAULT_MAX_TASK_TOKENS;
+  return raw;
+}
 const TRIM_MARKER = "\n…（中略）…\n";
 const MAX_SPEC_BYTES = 64_000;
 const DEFAULT_TOKENIZER_URL = "http://127.0.0.1:18991/tokenize";
@@ -185,32 +192,33 @@ function headTail(chars, keep) {
 
 // A token covers at least one UTF-8 byte, so a byte cap is also a token cap when the
 // tokenizer cannot be reached.
-function fitByBytes(text) {
+function fitByBytes(text, budget) {
   const chars = Array.from(text);
   let low = 0, high = chars.length;
   while (low < high) {
     const mid = Math.ceil((low + high) / 2);
-    if (Buffer.byteLength(headTail(chars, mid), "utf8") <= MAX_TASK_TOKENS) low = mid;
+    if (Buffer.byteLength(headTail(chars, mid), "utf8") <= budget) low = mid;
     else high = mid - 1;
   }
   return { text: headTail(chars, low), truncated: true };
 }
 
 export function fitToTokenBudget(text, env = process.env) {
-  if (Buffer.byteLength(text, "utf8") <= MAX_TASK_TOKENS) return { text, truncated: false };
+  const budget = maxTaskTokens(env);
+  if (Buffer.byteLength(text, "utf8") <= budget) return { text, truncated: false };
   const chars = Array.from(text);
   const total = countTokens(text, env);
-  if (total === null) return fitByBytes(text);
-  if (total <= MAX_TASK_TOKENS) return { text, truncated: false };
-  let keep = Math.floor(chars.length * MAX_TASK_TOKENS / total);
+  if (total === null) return fitByBytes(text, budget);
+  if (total <= budget) return { text, truncated: false };
+  let keep = Math.floor(chars.length * budget / total);
   for (let attempt = 0; attempt < 3 && keep > 0; attempt += 1) {
     const candidate = headTail(chars, keep);
     const tokens = countTokens(candidate, env);
-    if (tokens === null) return fitByBytes(text);
-    if (tokens <= MAX_TASK_TOKENS) return { text: candidate, truncated: true };
-    keep = Math.floor(keep * MAX_TASK_TOKENS / tokens);
+    if (tokens === null) return fitByBytes(text, budget);
+    if (tokens <= budget) return { text: candidate, truncated: true };
+    keep = Math.floor(keep * budget / tokens);
   }
-  return fitByBytes(text);
+  return fitByBytes(text, budget);
 }
 
 function specFingerprint(file, cwd) {
@@ -222,10 +230,13 @@ function specFingerprint(file, cwd) {
   } catch { return "unreadable"; }
 }
 
-export function dispatchKey(event, invocation) {
+export function dispatchKey(event, invocation, env = process.env) {
   const cwd = event.cwd ?? "";
+  // The effective token budget changes how much of the instruction was judged, so a dispatch
+  // re-run after raising it must not reuse the earlier advice.
   const stable = [event.session_id ?? "unknown", cwd, invocation.name,
     invocation.task, invocation.followup, invocation.title ?? null, invocation.reason ?? null,
+    maxTaskTokens(env),
     ...invocation.specFiles.map((file) => file + ":" + specFingerprint(file, cwd))];
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
 }
@@ -274,7 +285,7 @@ export function preToolDecision(event, env = process.env) {
   if (event.tool_name !== "Bash") return null;
   const invocation = parseInvocation(event.tool_input?.command);
   if (!invocation) return null;
-  const key = dispatchKey(event, invocation);
+  const key = dispatchKey(event, invocation, env);
   if (readCache(key, env)) return null;
   const summary = summarizeWithMeta(invocation, event.cwd || process.cwd());
   if (!summary.text.trim()) return null;

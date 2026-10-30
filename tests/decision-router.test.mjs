@@ -309,6 +309,87 @@ test("input that fits the token budget is not marked truncated", () => {
   } finally { f.dispose(); }
 });
 
+test("the token budget can be raised to match a larger d1 batch", () => {
+  const f = fixture();
+  try {
+    const body = "あ".repeat(1_000);
+    const underDefault = f.run(event("orca-worker-start --name budget-default --reason '" + body + "'"),
+      { FAKE_ARGV: path.join(f.dir, "argv.json") });
+    assert.equal(underDefault.status, 0, underDefault.stderr);
+    assert.match(reasonOf(underDefault), /input_truncated=true/);
+
+    const raised = f.run(event("orca-worker-start --name budget-raised --reason '" + body + "'"),
+      { FAKE_ARGV: path.join(f.dir, "argv.json"), DECISION_ROUTER_MAX_TASK_TOKENS: "1200" });
+    assert.equal(raised.status, 0, raised.stderr);
+    assert.doesNotMatch(reasonOf(raised), /input_truncated=true/);
+    assert.equal(taskArgument(f), body);
+  } finally { f.dispose(); }
+});
+
+test("an out-of-range budget setting is ignored instead of loosening the limit", () => {
+  const f = fixture();
+  try {
+    const body = "あ".repeat(1_000);
+    for (const value of ["10", "5000", "abc", "1200.5"]) {
+      const result = f.run(event("orca-worker-start --name budget-" + value.replace(".", "-") + " --reason '" + body + "'"),
+        { FAKE_ARGV: path.join(f.dir, "argv.json"), DECISION_ROUTER_MAX_TASK_TOKENS: value });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(reasonOf(result), /input_truncated=true/, value);
+      assert.ok(Math.ceil(Array.from(taskArgument(f)).length * 0.55) <= BUDGET, value);
+    }
+  } finally { f.dispose(); }
+});
+
+test("budget boundaries and empty values behave as documented", () => {
+  const f = fixture();
+  try {
+    const body = "あ".repeat(1_000);
+    const cases = [["64", 64], ["4096", 4096], ["100", 100], ["", 357]];
+    for (const [value, expected] of cases) {
+      const result = f.run(event("orca-worker-start --name edge-" + (value || "empty") + " --reason '" + body + "'"),
+        { FAKE_ARGV: path.join(f.dir, "argv.json"), DECISION_ROUTER_MAX_TASK_TOKENS: value });
+      assert.equal(result.status, 0, result.stderr);
+      const chars = Array.from(taskArgument(f)).length;
+      assert.ok(Math.ceil(chars * 0.55) <= expected, value + " -> " + chars);
+      if (expected < 550) assert.match(reasonOf(result), /input_truncated=true/, value);
+      else assert.doesNotMatch(reasonOf(result), /input_truncated=true/, value);
+    }
+  } finally { f.dispose(); }
+});
+
+test("raising the budget re-judges a dispatch instead of reusing cached advice", () => {
+  const f = fixture();
+  try {
+    const body = "あ".repeat(1_000);
+    const command = "orca-worker-start --name budget-cache --reason '" + body + "'";
+    const first = f.run(event(command), { FAKE_ARGV: path.join(f.dir, "argv.json") });
+    assert.equal(first.status, 0, first.stderr);
+    assert.match(reasonOf(first), /input_truncated=true/);
+    assert.equal(f.run(event(command), { FAKE_ARGV: path.join(f.dir, "argv.json") }).stdout.trim(), "",
+      "the same dispatch inside the cache window must stay silent");
+
+    const raised = f.run(event(command),
+      { FAKE_ARGV: path.join(f.dir, "argv.json"), DECISION_ROUTER_MAX_TASK_TOKENS: "1200" });
+    assert.equal(raised.status, 0, raised.stderr);
+    assert.doesNotMatch(raised.stdout.trim(), /^$/, "a new budget must produce advice, not a cache hit");
+    assert.match(reasonOf(raised), /risk=/);
+  } finally { f.dispose(); }
+});
+
+test("the byte fallback also honours a raised budget", () => {
+  const f = fixture();
+  try {
+    const long = "あ".repeat(2_000);
+    const result = f.run(event("orca-worker-start --name bytes-raised --reason '" + long + "'"),
+      { FAKE_ARGV: path.join(f.dir, "argv.json"), FAKE_TOKENIZE_FAIL: "1",
+        DECISION_ROUTER_MAX_TASK_TOKENS: "900", FAKE_MAX_TASK_CHARS: "5000" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(reasonOf(result), /input_truncated=true/);
+    const bytes = Buffer.byteLength(taskArgument(f), "utf8");
+    assert.ok(bytes > 357 && bytes <= 900, String(bytes));
+  } finally { f.dispose(); }
+});
+
 test("an unreachable tokenizer falls back to a guaranteed byte budget", () => {
   const f = fixture();
   try {
