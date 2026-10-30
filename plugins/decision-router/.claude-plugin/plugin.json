@@ -1,6 +1,6 @@
 {
   "name": "decision-router",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Consult a local decision model before Claude Code dispatches an Orca worker.",
   "author": {
     "name": "unitea1992"

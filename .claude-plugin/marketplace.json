@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Claude Code plugins for agent delegation, local decision routing and TypeScript tooling.",
-    "version": "0.5.2"
+    "version": "0.5.3"
   },
   "plugins": [
     {
       "name": "opencode",
       "description": "Use OpenCode from Claude Code to review code or delegate tasks.",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "author": {
         "name": "unitea1992"
       },
@@ -20,7 +20,7 @@
     {
       "name": "pi",
       "description": "Use Pi (a local-model coding agent) from Claude Code to delegate investigation and implementation tasks.",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "author": {
         "name": "unitea1992"
       },
@@ -29,7 +29,7 @@
     {
       "name": "dsh",
       "description": "Use DSH (DeepSeek Harness, via dst run) from Claude Code to delegate investigation and implementation tasks.",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "author": {
         "name": "unitea1992"
       },
@@ -38,7 +38,7 @@
     {
       "name": "typescript7-lsp",
       "description": "TypeScript and JavaScript language server for Claude Code that works with TypeScript 7 (tsc --lsp --stdio).",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "author": {
         "name": "unitea1992"
       },
@@ -47,7 +47,7 @@
     {
       "name": "decision-router",
       "description": "Use local decision models to advise Orca worker dispatch through deterministic Claude hooks.",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "author": {
         "name": "unitea1992"
       },
