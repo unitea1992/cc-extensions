@@ -11,7 +11,7 @@
 - 判定の取得に失敗したときは助言を出さず `systemMessage` で fail-open を表示する。CLI 未導入時は従来どおり何も表示しない。
 - 同じ name・spec パスでも指示書の内容や title/reason が変わった Dispatch は別判定にし、30 分キャッシュが古い助言を流用しないようにした。モデル・effort だけを替えた再試行は従来どおり同じ判定を使う。
 - プロバイダー応答は `kind`・`suggested_agent`・`effort`・`risk` を検証し、その4項目だけをキャッシュするようにした。`suggested_agent` は `pi`・`codex`・`claude` に限定し、入力本文・秘密・余分なフィールドは保存しない。契約に合わない応答は fail-open にする。引用符内の `;`・`|`・`&&` はコマンド区切りとして扱わず、引用されたコマンド置換も実行しない。
-- `decision-router` が任意で workspace-guide の `scripts/d1-shadow-allocate` の shadow 候補評価を初回の助言へ追記できるようにした。`DECISION_ROUTER_SHADOW_ALLOCATOR` の絶対パスを設定したときだけ動き、既存の判定 JSON を再推論せずに渡して候補と不明理由を表示する。ツール不在・相対パス・2秒タイムアウト・契約外の JSON では候補だけを出さず、判定の助言と fail-open は維持する。渡すのは検証済みの `kind`・`effort`・`risk`・`suggested_agent` だけで、本文・秘密を渡さず、`--log` を使わず、キャッシュには候補を保存しない。入力切詰・不完全入力・`risk=high` では候補評価を省略する。
+- `decision-router` が任意で workspace-guide の `scripts/d1-shadow-allocate` の shadow 候補評価を初回の助言へ追記できるようにした。`DECISION_ROUTER_SHADOW_ALLOCATOR` の絶対パスを設定したときだけ動き、既存の判定 JSON を再推論せずに渡して候補と不明理由を表示する。ツール不在・相対パス・2秒タイムアウト・契約外の JSON では候補だけを出さず、判定の助言と fail-open は維持する。渡すのは検証済みの `kind`・`effort`・`risk`・`suggested_agent` だけで、本文・秘密を渡さず、`--log` を使わず、キャッシュには候補を保存しない。コマンドの `--model` 明示指定は評価側へ渡して代替候補を出さず、安全に解釈できない値では候補評価を省略する。入力切詰・不完全入力・`risk=high` では候補評価を省略する。
 - `decision-router` の候補評価を、フックの残り予算（最大2秒）で打ち切るようにした。既存の判定処理に使った時間を差し引く。
 - 他のプラグインは中身を変えず、共通の版だけを上げた。
 

@@ -510,6 +510,7 @@ test("shadow candidates are advisory, never cached, and never see task text", ()
 
     const argv = JSON.parse(fs.readFileSync(argvFile, "utf8"));
     assert.ok(argv.includes("--classification"));
+    assert.equal(argv.includes("--explicit-model"), false);
     assert.equal(argv.join(" ").includes(secret), false);
     assert.equal(argv.includes("--log"), false);
 
@@ -605,6 +606,53 @@ test("high risk skips candidate evaluation", () => {
     assert.match(reason, /risk=high/);
     assert.doesNotMatch(reason, /候補評価/);
     assert.equal(callCount(f.shadowCalls), 0);
+  } finally { f.dispose(); }
+});
+
+test("an explicit model is passed to the candidate evaluator", () => {
+  const f = fixture();
+  try {
+    const argvFile = path.join(f.dir, "shadow-argv.json");
+    const result = f.run(event("orca-worker-start --name explicit --model spark-local/DeepSeek-V4.1-Flash-1017 --reason task"),
+      f.shadowEnv({ FAKE_SHADOW_ARGV: argvFile }));
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(reasonOf(result), /suggested_agent=pi/);
+    const argv = JSON.parse(fs.readFileSync(argvFile, "utf8"));
+    const at = argv.indexOf("--explicit-model");
+    assert.ok(at >= 0);
+    assert.equal(argv[at + 1], "spark-local/DeepSeek-V4.1-Flash-1017");
+  } finally { f.dispose(); }
+});
+
+test("--model and --model= are parsed; an unsafe value skips candidate advice", () => {
+  assert.equal(parseInvocation("orca-worker-start --name a --model river/x").model, "river/x");
+  assert.equal(parseInvocation("orca-worker-start --name a --model=spark-local/y").model, "spark-local/y");
+  assert.equal(parseInvocation("orca-worker-start --name a --model").model, null);
+  const f = fixture();
+  try {
+    const result = f.run(event("orca-worker-start --name unsafe --model 'x\nUNSAFE_MARKER' --reason task"), f.shadowEnv());
+    const reason = reasonOf(result);
+    assert.match(reason, /explicit_model_unresolved/);
+    assert.equal(reason.includes("UNSAFE_MARKER"), false);
+    assert.match(reason, /suggested_agent=pi/);
+    assert.equal(callCount(f.shadowCalls), 0);
+  } finally { f.dispose(); }
+});
+
+test("an explicit model does not change the Dispatch identity for retries", () => {
+  const base = event("orca-worker-start --name same-model --reason task");
+  const withModel = event("orca-worker-start --name same-model --model pi/one --reason task");
+  assert.equal(
+    dispatchKey(base, parseInvocation(base.tool_input.command)),
+    dispatchKey(withModel, parseInvocation(withModel.tool_input.command)));
+
+  const f = fixture();
+  try {
+    const command = "orca-worker-start --name retry-model --model spark-local/x --reason task";
+    assert.match(f.run(event(command), f.shadowEnv()).stdout, /"deny"/);
+    assert.equal(f.run(event("orca-worker-start --name retry-model --reason task"), f.shadowEnv()).stdout.trim(), "");
+    assert.equal(callCount(f.calls), 1);
+    assert.equal(callCount(f.shadowCalls), 1);
   } finally { f.dispose(); }
 });
 

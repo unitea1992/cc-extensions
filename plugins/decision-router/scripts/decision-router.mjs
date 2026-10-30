@@ -31,6 +31,7 @@ const SHADOW_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const SHADOW_PROVIDER = /^[a-z][a-z0-9-]{0,31}$/;
 const SHADOW_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,119}$/;
 const SHADOW_CODE = /^[a-z][a-z0-9_]{0,47}$/;
+const SHADOW_EXPLICIT_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,199}$/;
 // Deterministic floor for conditions that a trimmed middle could hide. It can only raise risk.
 const HIGH_RISK_TERMS =
   /(本番|production|デプロイ|deploy|課金|billing|支払|決済|削除|delete|rm\s+-rf|DROP\s+TABLE|force\s+push|--force|reset\s+--hard|秘密|secret|パスワード|password|credential|api[_-]?key|個人情報|顧客データ|データ破壊|不可逆)/i;
@@ -87,7 +88,8 @@ export function parseInvocation(command) {
       followup: option(args, "--followup-of"),
       specFiles: allOptions(args, "--spec-file"),
       reason: option(args, "--reason"),
-      title: option(args, "--title")
+      title: option(args, "--title"),
+      model: option(args, "--model")
     };
     if (!options.name && !options.task && !options.followup) return null;
     return options;
@@ -343,7 +345,7 @@ function shadowText(result) {
   return text.length > SHADOW_TEXT_LIMIT ? text.slice(0, SHADOW_TEXT_LIMIT) + "…" : text;
 }
 
-function shadowNotice(advice, context, env) {
+function shadowNotice(advice, context, env, explicitModel) {
   const bin = env.DECISION_ROUTER_SHADOW_ALLOCATOR;
   if (!bin) return null;
   if (!path.isAbsolute(bin)) {
@@ -365,11 +367,20 @@ function shadowNotice(advice, context, env) {
     return "候補評価: フックの時間予算が足りないため省略しました（shadow_no_time）。";
   }
   // Pass only the validated classification fields so task text and secrets never reach the tool.
+  let explicit = null;
+  if (explicitModel) {
+    if (!SHADOW_EXPLICIT_MODEL.test(explicitModel)) {
+      return "候補評価: 明示モデルを安全に解釈できないため省略しました（explicit_model_unresolved）。";
+    }
+    explicit = explicitModel;
+  }
   const classification = JSON.stringify({
     ok: true, kind: advice.kind, suggested_agent: advice.suggested_agent,
     effort: advice.effort, risk: advice.risk
   });
-  const run = spawnSync(bin, ["--classification", classification, "--timeout", "1"], {
+  const args = ["--classification", classification, "--timeout", "1"];
+  if (explicit) args.push("--explicit-model", explicit);
+  const run = spawnSync(bin, args, {
     encoding: "utf8", timeout: Math.min(SHADOW_SPAWN_TIMEOUT_MS, context.remainingMs),
     maxBuffer: 256_000, env, windowsHide: true
   });
@@ -414,7 +425,7 @@ export function preToolDecision(event, env = process.env) {
   const shadow = shadowNotice(advice, {
     truncated: fitted.truncated, omitted: summary.omitted,
     remainingMs: HOOK_BUDGET_MS - (Date.now() - startedAt)
-  }, env);
+  }, env, invocation.model);
   return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
