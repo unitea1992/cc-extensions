@@ -22,6 +22,15 @@ const KINDS = new Set(["routine", "implementation", "investigation", "visual", "
 const EFFORTS = new Set(["low", "medium", "high"]);
 const RISKS = new Set(["low", "medium", "high"]);
 const AGENTS = new Set(["pi", "codex", "claude"]);
+const SHADOW_MAX_CANDIDATES = 8;
+const SHADOW_TEXT_LIMIT = 2_000;
+const SHADOW_SPAWN_TIMEOUT_MS = 2_000;
+// hooks.json gives the hook 8 seconds; classification and trimming run before this budget.
+const HOOK_BUDGET_MS = 7_000;
+const SHADOW_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const SHADOW_PROVIDER = /^[a-z][a-z0-9-]{0,31}$/;
+const SHADOW_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,119}$/;
+const SHADOW_CODE = /^[a-z][a-z0-9_]{0,47}$/;
 // Deterministic floor for conditions that a trimmed middle could hide. It can only raise risk.
 const HIGH_RISK_TERMS =
   /(本番|production|デプロイ|deploy|課金|billing|支払|決済|削除|delete|rm\s+-rf|DROP\s+TABLE|force\s+push|--force|reset\s+--hard|秘密|secret|パスワード|password|credential|api[_-]?key|個人情報|顧客データ|データ破壊|不可逆)/i;
@@ -270,7 +279,113 @@ function failOpenNotice(trimmed) {
   };
 }
 
+function shadowCodes(value) {
+  if (!Array.isArray(value)) return null;
+  const codes = [];
+  for (const item of value) {
+    if (typeof item !== "string" || !SHADOW_CODE.test(item)) return null;
+    if (!codes.includes(item)) codes.push(item);
+    if (codes.length === 8) break;
+  }
+  return codes;
+}
+
+function shadowCandidate(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+  const { id, provider, model, eligible } = item;
+  if (typeof id !== "string" || !SHADOW_ID.test(id)) return null;
+  if (typeof provider !== "string" || !SHADOW_PROVIDER.test(provider)) return null;
+  if (typeof model !== "string" || !SHADOW_MODEL.test(model)) return null;
+  if (typeof eligible !== "boolean") return null;
+  const reasons = shadowCodes(item.reasons);
+  const warnings = shadowCodes(item.warnings);
+  if (!reasons || !warnings) return null;
+  return { id, provider, model, eligible, reasons, warnings };
+}
+
+// Only the documented shadow contract is accepted; anything else is treated as unavailable.
+export function parseShadowResult(stdout) {
+  let result;
+  try { result = JSON.parse(stdout); } catch { return null; }
+  if (!result || typeof result !== "object" || Array.isArray(result)) return null;
+  if (result.mode !== "shadow" || result.advisory_only !== true || result.auto_launch !== false) return null;
+  if (!Array.isArray(result.candidates)) return null;
+  const reasons = shadowCodes(result.reasons);
+  const warnings = shadowCodes(result.warnings);
+  if (!reasons || !warnings) return null;
+  const candidates = [];
+  for (const item of result.candidates) {
+    const candidate = shadowCandidate(item);
+    if (!candidate) return null;
+    candidates.push(candidate);
+    if (candidates.length === SHADOW_MAX_CANDIDATES) break;
+  }
+  return { candidates, reasons, warnings };
+}
+
+function shadowText(result) {
+  const eligible = result.candidates.filter((candidate) => candidate.eligible);
+  const excluded = result.candidates.filter((candidate) => !candidate.eligible);
+  const lines = ["候補評価（shadow・助言のみ。起動・モデル・費用は変えません）:"];
+  if (!eligible.length) lines.push("- 適格な候補はありません。");
+  for (const candidate of eligible) {
+    lines.push("- " + candidate.provider + "/" + candidate.model + "（" + candidate.id + "）: 適格");
+  }
+  for (const candidate of excluded) {
+    lines.push("- " + candidate.provider + "/" + candidate.model + "（" + candidate.id + "）: 対象外" +
+      (candidate.reasons.length ? "（" + candidate.reasons.join(", ") + "）" : ""));
+  }
+  if (result.reasons.length) lines.push("不明・対象外の理由: " + result.reasons.join(", "));
+  const warnings = result.warnings.filter((warning) => warning !== "shadow_only");
+  if (warnings.length) lines.push("未確認: " + warnings.join(", "));
+  lines.push("候補は提案であり、承認でも起動許可でもありません。");
+  const text = lines.join("\n");
+  return text.length > SHADOW_TEXT_LIMIT ? text.slice(0, SHADOW_TEXT_LIMIT) + "…" : text;
+}
+
+function shadowNotice(advice, context, env) {
+  const bin = env.DECISION_ROUTER_SHADOW_ALLOCATOR;
+  if (!bin) return null;
+  if (!path.isAbsolute(bin)) {
+    return "候補評価: 実行ファイルのパスが絶対パスではありません（shadow_allocator_invalid）。";
+  }
+  try {
+    if (!fs.statSync(bin).isFile()) throw new Error("not a file");
+  } catch {
+    return "候補評価: 実行ファイルが見つかりません（shadow_allocator_missing）。";
+  }
+  if (context.truncated) {
+    return "候補評価: 入力がトークン上限で切り詰められているため省略しました（input_truncated）。";
+  }
+  if (context.omitted) {
+    return "候補評価: 指示書の一部が読めないため省略しました（input_incomplete）。";
+  }
+  if (advice.risk === "high") return null;
+  if (context.remainingMs < 300) {
+    return "候補評価: フックの時間予算が足りないため省略しました（shadow_no_time）。";
+  }
+  // Pass only the validated classification fields so task text and secrets never reach the tool.
+  const classification = JSON.stringify({
+    ok: true, kind: advice.kind, suggested_agent: advice.suggested_agent,
+    effort: advice.effort, risk: advice.risk
+  });
+  const run = spawnSync(bin, ["--classification", classification, "--timeout", "1"], {
+    encoding: "utf8", timeout: Math.min(SHADOW_SPAWN_TIMEOUT_MS, context.remainingMs),
+    maxBuffer: 256_000, env, windowsHide: true
+  });
+  if (run.error || run.status !== 0) {
+    const code = run.error?.code === "ETIMEDOUT" ? "shadow_timeout" : "shadow_unavailable";
+    return "候補評価: 取得できませんでした（" + code + "）。上記の判定の助言はそのまま有効です。";
+  }
+  const result = parseShadowResult(run.stdout);
+  if (!result) {
+    return "候補評価: 応答が契約に合わないため表示しません（shadow_invalid_response）。上記の判定の助言はそのまま有効です。";
+  }
+  return shadowText(result);
+}
+
 export function preToolDecision(event, env = process.env) {
+  const startedAt = Date.now();
   if (event.tool_name !== "Bash") return null;
   const invocation = parseInvocation(event.tool_input?.command);
   if (!invocation) return null;
@@ -296,6 +411,10 @@ export function preToolDecision(event, env = process.env) {
     (highRisk ? ", high_risk_input=true" : "") +
     (fitted.truncated ? ", input_truncated=true" : "") +
     (summary.omitted ? ", input_incomplete=true" : "");
+  const shadow = shadowNotice(advice, {
+    truncated: fitted.truncated, omitted: summary.omitted,
+    remainingMs: HOOK_BUDGET_MS - (Date.now() - startedAt)
+  }, env);
   return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
@@ -303,7 +422,8 @@ export function preToolDecision(event, env = process.env) {
       permissionDecisionReason: "decision-router: 自動判定を実施しました (" + verdict +
         ")。これは提案であり承認ではありません。ユーザー指定、最新の利用枠、agent-model-check、orca-worker-startの安全検査を優先し、必要なら引数を見直して同じDispatchを再実行してください。再実行では同じ判定を繰り返しません。" +
         (fitted.truncated ? "入力は文字数ではなくトークン上限に合わせて先頭と末尾だけを渡したため、途中の条件は判定に含まれていません。" : "") +
-        (summary.omitted ? "指示書の一部は読み取れないため、判定に含まれていません。" : "")
+        (summary.omitted ? "指示書の一部は読み取れないため、判定に含まれていません。" : "") +
+        (shadow ? "\n" + shadow : "")
     }
   };
 }

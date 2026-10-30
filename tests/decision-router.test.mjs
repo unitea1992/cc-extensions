@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   parseInvocation, summarizeTask, fitToTokenBudget, dispatchKey, readCache, writeCache,
-  routeTask, status
+  routeTask, status, parseShadowResult
 } from "../plugins/decision-router/scripts/decision-router.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -55,23 +55,48 @@ console.log(JSON.stringify({ tokens: Math.ceil(Array.from(text).length * ratio) 
   return bin;
 }
 
+function makeShadow(dir) {
+  const bin = path.join(dir, "fake-shadow-allocate");
+  fs.writeFileSync(bin, `#!/usr/bin/env node
+const fs = require("fs");
+if (process.env.FAKE_SHADOW_CALLS) fs.appendFileSync(process.env.FAKE_SHADOW_CALLS, "call\\n");
+if (process.env.FAKE_SHADOW_ARGV) fs.writeFileSync(process.env.FAKE_SHADOW_ARGV, JSON.stringify(process.argv.slice(2)));
+if (process.env.FAKE_SHADOW_SLEEP) { const end = Date.now() + Number(process.env.FAKE_SHADOW_SLEEP); while (Date.now() < end) {} }
+const mode = process.env.FAKE_SHADOW_MODE || "ok";
+if (mode === "fail") process.exit(1);
+if (mode === "bad-json") { console.log("not json"); process.exit(0); }
+if (mode === "wrong-shape") { console.log(JSON.stringify({ mode: "shadow", advisory_only: true, auto_launch: true, candidates: [] })); process.exit(0); }
+if (mode === "secret-id") { console.log(JSON.stringify({ mode: "shadow", advisory_only: true, auto_launch: false, candidates: [{ id: "bad\\nSECRET_MARKER_777", provider: "spark-local", model: "m", eligible: true, reasons: [], warnings: [] }], reasons: [], warnings: ["shadow_only"] })); process.exit(0); }
+if (mode === "capacity") { console.log(JSON.stringify({ mode: "shadow", advisory_only: true, auto_launch: false, candidates: [], reasons: ["quota_observation_missing", "quota_not_assignable"], warnings: ["shadow_only", "metric_freshness_unconfirmed"] })); process.exit(0); }
+console.log(JSON.stringify({ mode: "shadow", advisory_only: true, auto_launch: false, selection: "shadow_advisory", candidates: [
+  { id: "spark-local-deepseek", provider: "spark-local", model: "DeepSeek-V4.1-Flash-1017", eligible: true, reasons: [], warnings: ["local_cache_unknown"] },
+  { id: "river-deepseek", provider: "river", model: "deepseek-ai/DeepSeek-V4.1-Flash-1017", eligible: false, reasons: ["quota_observation_missing"], warnings: ["river_credit_state_unknown"] }
+], reasons: [], warnings: ["shadow_only", "metric_freshness_unconfirmed", "suggested_agent_mismatch"] }));
+`, { mode: 0o755 });
+  return bin;
+}
+
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "decision-router-test-"));
   const bin = makeProvider(dir);
   const tokenizer = makeTokenizer(dir);
+  const shadow = makeShadow(dir);
   const calls = path.join(dir, "calls.log");
   const tokenCalls = path.join(dir, "tokenize-calls.log");
+  const shadowCalls = path.join(dir, "shadow-calls.log");
   const env = { ...process.env, DECISION_ROUTER_PROVIDER_BIN: bin,
     DECISION_ROUTER_TOKENIZE_BIN: tokenizer,
     DECISION_ROUTER_CACHE_DIR: path.join(dir, "cache"),
-    FAKE_CALLS: calls, FAKE_TOKENIZE_CALLS: tokenCalls };
+    FAKE_CALLS: calls, FAKE_TOKENIZE_CALLS: tokenCalls, FAKE_SHADOW_CALLS: shadowCalls };
   delete env.NODE_OPTIONS;
   delete env.DECISION_ROUTER_TOKENIZER_URL;
+  delete env.DECISION_ROUTER_SHADOW_ALLOCATOR;
   const run = (event, extra = {}, timeout = 3000) => spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify(event), encoding: "utf8", timeout, env: { ...env, ...extra }
   });
+  const shadowEnv = (extra = {}) => ({ ...env, DECISION_ROUTER_SHADOW_ALLOCATOR: shadow, ...extra });
   const dispose = () => fs.rmSync(dir, { recursive: true, force: true });
-  return { dir, bin, tokenizer, calls, tokenCalls, env, run, dispose };
+  return { dir, bin, tokenizer, shadow, calls, tokenCalls, shadowCalls, env, shadowEnv, run, dispose };
 }
 
 function event(command, session = "s1", cwd = "/tmp") {
@@ -456,4 +481,150 @@ test("real local d1 accepts the measured token budget", {
   const advice = routeTask(fitted.text, process.env);
   assert.ok(advice, "expected advice from the real d1 service");
   assert.ok(["routine", "implementation", "investigation", "visual", "critical"].includes(advice.kind));
+});
+
+test("no shadow allocator configured leaves the advice unchanged", () => {
+  const f = fixture();
+  try {
+    const result = f.run(event("orca-worker-start --name plain --reason task"));
+    assert.match(reasonOf(result), /suggested_agent=pi/);
+    assert.doesNotMatch(reasonOf(result), /候補評価/);
+    assert.equal(callCount(f.shadowCalls), 0);
+  } finally { f.dispose(); }
+});
+
+test("shadow candidates are advisory, never cached, and never see task text", () => {
+  const f = fixture();
+  try {
+    const secret = "TASK_ONLY_MARKER_555";
+    const command = "orca-worker-start --name shadow --reason '" + secret + "'";
+    const argvFile = path.join(f.dir, "shadow-argv.json");
+    const result = f.run(event(command), f.shadowEnv({ FAKE_SHADOW_ARGV: argvFile }));
+    assert.equal(result.status, 0, result.stderr);
+    const reason = reasonOf(result);
+    assert.match(reason, /spark-local\/DeepSeek-V4\.1-Flash-1017/);
+    assert.match(reason, /quota_observation_missing/);
+    assert.match(reason, /metric_freshness_unconfirmed/);
+    assert.match(reason, /提案であり/);
+    assert.equal(callCount(f.shadowCalls), 1);
+
+    const argv = JSON.parse(fs.readFileSync(argvFile, "utf8"));
+    assert.ok(argv.includes("--classification"));
+    assert.equal(argv.join(" ").includes(secret), false);
+    assert.equal(argv.includes("--log"), false);
+
+    const retry = f.run(event(command), f.shadowEnv());
+    assert.equal(retry.stdout.trim(), "");
+    assert.equal(callCount(f.shadowCalls), 1);
+    assert.equal(callCount(f.calls), 1);
+
+    const raw = fs.readFileSync(cachedFiles(f.env)[0], "utf8");
+    assert.equal(raw.includes(secret), false);
+    assert.equal(raw.includes("DeepSeek"), false);
+  } finally { f.dispose(); }
+});
+
+test("missing, relative, failing and malformed shadow tools only drop the candidate note", () => {
+  const f = fixture();
+  try {
+    const cases = [
+      [path.join(f.dir, "no-such-shadow"), "shadow_allocator_missing"],
+      ["scripts/d1-shadow-allocate", "shadow_allocator_invalid"],
+      [{ FAKE_SHADOW_MODE: "fail" }, "shadow_unavailable"],
+      [{ FAKE_SHADOW_MODE: "bad-json" }, "shadow_invalid_response"],
+      [{ FAKE_SHADOW_MODE: "wrong-shape" }, "shadow_invalid_response"]
+    ];
+    for (const [index, [setting, code]] of cases.entries()) {
+      const extra = typeof setting === "string"
+        ? { DECISION_ROUTER_SHADOW_ALLOCATOR: setting } : setting;
+      const result = f.run(event("orca-worker-start --name case-" + index + " --reason task"), f.shadowEnv(extra));
+      assert.equal(result.status, 0, result.stderr);
+      const reason = reasonOf(result);
+      assert.match(reason, new RegExp(code));
+      assert.match(reason, /suggested_agent=pi/);
+      assert.doesNotMatch(reason, /SECRET_MARKER_777/);
+    }
+  } finally { f.dispose(); }
+});
+
+test("a slow shadow tool stays inside the hook budget", () => {
+  const f = fixture();
+  try {
+    const started = Date.now();
+    const result = f.run(event("orca-worker-start --name slow-shadow --reason task"),
+      f.shadowEnv({ FAKE_SHADOW_SLEEP: "5000" }), 9000);
+    const elapsed = Date.now() - started;
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(reasonOf(result), /shadow_timeout/);
+    assert.match(reasonOf(result), /suggested_agent=pi/);
+    assert.ok(elapsed < 6000, String(elapsed));
+  } finally { f.dispose(); }
+});
+
+test("unknown capacity is shown as reasons without eligible candidates", () => {
+  const f = fixture();
+  try {
+    const result = f.run(event("orca-worker-start --name capacity --reason task"),
+      f.shadowEnv({ FAKE_SHADOW_MODE: "capacity" }));
+    const reason = reasonOf(result);
+    assert.match(reason, /適格な候補はありません/);
+    assert.match(reason, /quota_observation_missing/);
+    assert.match(reason, /quota_not_assignable/);
+    assert.match(reason, /metric_freshness_unconfirmed/);
+    assert.match(reason, /suggested_agent=pi/);
+  } finally { f.dispose(); }
+});
+
+test("trimmed or incomplete input skips candidate evaluation", () => {
+  const f = fixture();
+  try {
+    const long = "あ".repeat(3_000);
+    const trimmed = f.run(event("orca-worker-start --name trim-shadow --reason '" + long + "'"),
+      f.shadowEnv({ FAKE_TOKENIZE_FAIL: "1", FAKE_MAX_TASK_CHARS: "121" }));
+    const trimmedReason = reasonOf(trimmed);
+    assert.match(trimmedReason, /input_truncated=true/);
+    assert.match(trimmedReason, /候補評価: 入力がトークン上限/);
+
+    const cwd = f.dir;
+    const missing = f.run(event("orca-worker-start --name spec-shadow --reason task --spec-file missing.md", "s1", cwd),
+      f.shadowEnv());
+    const missingReason = reasonOf(missing);
+    assert.match(missingReason, /input_incomplete=true/);
+    assert.match(missingReason, /候補評価: 指示書の一部/);
+
+    assert.equal(callCount(f.shadowCalls), 0);
+  } finally { f.dispose(); }
+});
+
+test("high risk skips candidate evaluation", () => {
+  const f = fixture();
+  try {
+    const result = f.run(event("orca-worker-start --name high-shadow --reason task"),
+      f.shadowEnv({ FAKE_MODE: "high-risk" }));
+    const reason = reasonOf(result);
+    assert.match(reason, /risk=high/);
+    assert.doesNotMatch(reason, /候補評価/);
+    assert.equal(callCount(f.shadowCalls), 0);
+  } finally { f.dispose(); }
+});
+
+test("shadow parser accepts only the documented shape", () => {
+  const good = parseShadowResult(JSON.stringify({
+    mode: "shadow", advisory_only: true, auto_launch: false,
+    candidates: [{ id: "spark-local-deepseek", provider: "spark-local",
+      model: "DeepSeek-V4.1-Flash-1017", eligible: true, reasons: [], warnings: ["local_cache_unknown"] }],
+    reasons: [], warnings: ["shadow_only"]
+  }));
+  assert.equal(good.candidates.length, 1);
+  assert.deepEqual(good.warnings, ["shadow_only"]);
+
+  for (const bad of [
+    "not json",
+    JSON.stringify({ mode: "shadow", advisory_only: true, auto_launch: true, candidates: [] }),
+    JSON.stringify({ mode: "shadow", advisory_only: false, auto_launch: false, candidates: [] }),
+    JSON.stringify({ mode: "shadow", advisory_only: true, auto_launch: false,
+      candidates: [{ id: "bad\nSECRET", provider: "p", model: "m", eligible: true, reasons: [], warnings: [] }] }),
+    JSON.stringify({ mode: "shadow", advisory_only: true, auto_launch: false, candidates: [],
+      reasons: ["Quota bad"], warnings: [] })
+  ]) assert.equal(parseShadowResult(bad), null);
 });

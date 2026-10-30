@@ -12,6 +12,7 @@ Claude Code が Bash 経由で `orca-worker-start` を呼ぶ直前だけ、`PreT
 - 判定に使う全文（切り詰める前）を、本番・デプロイ・課金・削除・秘密などの高リスク語で決定的に走査します。該当すれば `risk=high`・`effort=high` に引き上げます。長い指示書の途中で落ちた条件を見逃さないための床で、モデルの判定を下げることはありません。
 - `--spec-file` が 64KB 超・非ファイル・読取失敗・空のときは、その指示書を判定に含めず `input_incomplete=true` として明示し、`risk=low` は `medium` として返します。読めない指示書を完全な根拠にしません。
 - `--spec-file` はローカルの通常ファイルから読み、モデルへ渡します。シェル文字列を実行・展開しません。
+- 任意の候補評価: `workspace-guide` の `scripts/d1-shadow-allocate` を `DECISION_ROUTER_SHADOW_ALLOCATOR`（絶対パス）に設定すると、同じ判定を再推論せずに渡し、shadow の候補と不明理由を助言へ追記します。設定なし・実行ファイル不在・相対パス・タイムアウト・契約外の JSON のときは候補だけを出さず、上記の判定助言と fail-open はそのままです。渡すのは検証済みの `kind`・`effort`・`risk`・`suggested_agent` だけで、本文や秘密は渡さず、`--log` も使いません。入力切詰・読めない指示書・`risk=high` では候補評価を省略します。候補は shadow の助言で、モデルや作業役の起動・変更、明示指定の上書きはしません。キャッシュには候補を保存しません。
 - ローカル判断APIと tokenizer（`127.0.0.1:18991`）のみを使います。キーや追加の課金プロバイダーは不要です。`DECISION_ROUTER_TOKENIZER_URL` はループバック以外を受け付けません。
 - 特定の Bash 起動経路以外（Orca GUI、Claude以外のエージェント、ラッパースクリプト内部の起動）にはフックしません。CLI単位の厳密な全経路強制は別の機構が必要です。
 
@@ -24,7 +25,7 @@ Claude Code が Bash 経由で `orca-worker-start` を呼ぶ直前だけ、`PreT
 /decision-router:status
 ```
 
-通常のサブスクリプション認証には影響しません。ローカル `d1-route` コマンドが PATH にある場合のみ推論します。必要なら環境変数 `DECISION_ROUTER_PROVIDER_BIN` で実行ファイルを指定できます。
+通常のサブスクリプション認証には影響しません。ローカル `d1-route` コマンドが PATH にある場合のみ推論します。必要なら環境変数 `DECISION_ROUTER_PROVIDER_BIN` で実行ファイルを指定できます。候補評価を使う場合だけ `DECISION_ROUTER_SHADOW_ALLOCATOR` に `d1-shadow-allocate` の絶対パスを設定します。未設定でも従来の判定は動きます。
 
 ## 停止
 
@@ -32,4 +33,4 @@ Claude Code が Bash 経由で `orca-worker-start` を呼ぶ直前だけ、`PreT
 
 ## 実装
 
-`scripts/pretool-hook.mjs` がClaude Codeイベントを読み、`scripts/decision-router.mjs` が対象コマンドの判定、入力の計測と切り詰め、重複回避、プロバイダー呼び出しを行います。`scripts/tokenize-count.mjs` はローカル tokenizer にだけ問い合わせます。状態ファイルは `~/.cache/cc-extensions/decision-router` 下に保存し、モデルの入力文はキャッシュせず、検証済みの `kind`・`suggested_agent`・`effort`・`risk` だけを保存します。コマンド文字列・作業本文・秘密は保存しません。
+`scripts/pretool-hook.mjs` がClaude Codeイベントを読み、`scripts/decision-router.mjs` が対象コマンドの判定、入力の計測と切り詰め、重複回避、プロバイダー呼び出し、任意の候補評価を行います。候補評価はフックの残り予算（最大2秒）で打ち切り、既存の判定処理に使った時間を差し引きます。`scripts/tokenize-count.mjs` はローカル tokenizer にだけ問い合わせます。状態ファイルは `~/.cache/cc-extensions/decision-router` 下に保存し、モデルの入力文はキャッシュせず、検証済みの `kind`・`suggested_agent`・`effort`・`risk` だけを保存します。コマンド文字列・作業本文・秘密は保存しません。
