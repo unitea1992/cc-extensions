@@ -32,12 +32,12 @@ if (maxChars && Array.from(task).length > maxChars) {
 const mode = process.env.FAKE_MODE || "ok";
 if (mode === "missing-agent") console.log(JSON.stringify({ ok: true, kind: "routine", effort: "low", risk: "low" }));
 else if (mode === "bad-json") console.log("not json");
-else if (mode === "unknown-kind") console.log(JSON.stringify({ ok: true, kind: "nope", effort: "low", risk: "low", suggested_agent: "pi" }));
+else if (mode === "unknown-kind") console.log(JSON.stringify({ ok: true, kind: "nope", effort: "low", risk: "low", suggested_agent: "dsh" }));
 else if (mode === "secret-agent") console.log(JSON.stringify({ ok: true, kind: "routine", effort: "low", risk: "low", suggested_agent: "SECRET_AGENT_123" }));
 else if (mode === "newline-agent") console.log(JSON.stringify({ ok: true, kind: "routine", effort: "low", risk: "low", suggested_agent: "pi\\nSECRET" }));
 else if (mode === "high-risk") console.log(JSON.stringify({ ok: true, kind: "critical", effort: "high", risk: "high", suggested_agent: "codex" }));
-else if (mode === "echo-extra") console.log(JSON.stringify({ ok: true, kind: "routine", effort: "low", risk: "low", suggested_agent: "pi", model: null, reason: task, echo: task }));
-else console.log(JSON.stringify({ ok: true, kind: "routine", effort: "low", risk: "low", suggested_agent: "pi", model: null }));
+else if (mode === "echo-extra") console.log(JSON.stringify({ ok: true, kind: "routine", effort: "low", risk: "low", suggested_agent: "dsh", model: null, reason: task, echo: task }));
+else console.log(JSON.stringify({ ok: true, kind: "routine", effort: "low", risk: "low", suggested_agent: "dsh", model: null }));
 `, { mode: 0o755 });
   return bin;
 }
@@ -103,7 +103,7 @@ function assertFailOpen(result) {
   assert.match(output.systemMessage, /fail-open/);
 }
 
-const ADVICE = { ok: true, kind: "routine", suggested_agent: "pi", effort: "low", risk: "low" };
+const ADVICE = { ok: true, kind: "routine", suggested_agent: "dsh", effort: "low", risk: "low" };
 const BUDGET = 357;
 
 test("finds a dispatch, ignoring quoted or unrelated mentions", () => {
@@ -160,8 +160,8 @@ test("first dispatch is denied once with advice, retry is allowed", () => {
     assert.equal(first.status, 0, first.stderr);
     const result = JSON.parse(first.stdout);
     assert.equal(result.hookSpecificOutput.permissionDecision, "deny");
-    assert.match(result.hookSpecificOutput.permissionDecisionReason, /suggested_agent=pi/);
-    const retry = f.run(event("orca-worker-start --name fix-ui --reason 'small task' --agent pi --effort low"));
+    assert.match(result.hookSpecificOutput.permissionDecisionReason, /suggested_agent=dsh/);
+    const retry = f.run(event("orca-worker-start --name fix-ui --reason 'small task' --agent dsh --effort low"));
     assert.equal(retry.status, 0, retry.stderr);
     assert.equal(retry.stdout.trim(), "");
     assert.equal(callCount(f.calls), 1);

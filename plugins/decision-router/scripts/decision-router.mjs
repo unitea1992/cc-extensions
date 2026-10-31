@@ -28,7 +28,7 @@ const TOKENIZE_HELPER = path.join(path.dirname(fileURLToPath(import.meta.url)), 
 const KINDS = new Set(["routine", "implementation", "investigation", "visual", "critical"]);
 const EFFORTS = new Set(["low", "medium", "high"]);
 const RISKS = new Set(["low", "medium", "high"]);
-const AGENTS = new Set(["pi", "codex", "claude"]);
+const AGENTS = new Set(["dsh", "codex", "claude"]);
 // Deterministic floor for conditions that a trimmed middle could hide. It can only raise risk.
 const HIGH_RISK_TERMS =
   /(本番|production|デプロイ|deploy|課金|billing|支払|決済|削除|delete|rm\s+-rf|DROP\s+TABLE|force\s+push|--force|reset\s+--hard|秘密|secret|パスワード|password|credential|api[_-]?key|個人情報|顧客データ|データ破壊|不可逆)/i;
