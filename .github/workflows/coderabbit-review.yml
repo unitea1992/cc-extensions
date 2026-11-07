@@ -1,0 +1,37 @@
+# Trigger the free CodeRabbit review on public PRs with fewer than 10 stars.
+name: Request CodeRabbit review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  issues: write
+
+jobs:
+  request-review:
+    if: >-
+      ${{
+        !github.event.repository.private &&
+        !github.event.pull_request.draft &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.user.login != 'dependabot[bot]' &&
+        !contains(github.event.pull_request.body, '@coderabbitai ignore')
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Request review
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { data: repo } = await github.rest.repos.get(context.repo);
+            if (repo.stargazers_count >= 10) {
+              core.info('CodeRabbit automatic review is available at 10+ stars.');
+              return;
+            }
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: context.issue.number,
+              body: '@coderabbitai review',
+            });
