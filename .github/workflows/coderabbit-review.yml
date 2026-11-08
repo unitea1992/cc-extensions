@@ -1,12 +1,22 @@
 # Trigger the free CodeRabbit review on public PRs with fewer than 10 stars.
+# CodeRabbit requires a manual trigger for these repositories. Comments from
+# github-actions[bot] are ignored for this gate, so the workflow posts as the
+# owner of the CODERABBIT_REVIEW_TOKEN secret (a user PAT).
+#
+# Setup: create a fine-grained PAT with Issues: read/write and Pull requests:
+# read/write for this repository, then store it as CODERABBIT_REVIEW_TOKEN.
 name: Request CodeRabbit review
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review]
+    types: [opened, reopened, ready_for_review, synchronize]
 
 permissions:
-  issues: write
+  contents: read
+
+concurrency:
+  group: coderabbit-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   request-review:
@@ -21,17 +31,57 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - name: Check trigger token
+        env:
+          CODERABBIT_REVIEW_TOKEN: ${{ secrets.CODERABBIT_REVIEW_TOKEN }}
+        run: |
+          if [ -z "$CODERABBIT_REVIEW_TOKEN" ]; then
+            echo "::error::Set CODERABBIT_REVIEW_TOKEN to a user PAT with Issues: read/write and Pull requests: read/write."
+            exit 1
+          fi
       - name: Request review
-        uses: actions/github-script@v9
+        # Pinned to v9.0.0; this repository requires full-length commit SHAs.
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
+          github-token: ${{ secrets.CODERABBIT_REVIEW_TOKEN }}
           script: |
             const { data: repo } = await github.rest.repos.get(context.repo);
             if (repo.stargazers_count >= 10) {
               core.info('CodeRabbit automatic review is available at 10+ stars.');
               return;
             }
+
+            const headSha = context.payload.pull_request.head.sha;
+            const marker = `<!-- coderabbit-review-request:${headSha} -->`;
+            const query = `
+              query($owner: String!, $repo: String!, $number: Int!) {
+                viewer { login }
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) {
+                    comments(last: 100) {
+                      nodes {
+                        body
+                        author { login }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+            const result = await github.graphql(query, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              number: context.issue.number,
+            });
+            const login = result.viewer.login;
+            const comments = result.repository.pullRequest.comments.nodes;
+            if (comments.some((comment) => comment.author?.login === login && comment.body?.includes(marker))) {
+              core.info(`CodeRabbit review already requested for ${headSha}.`);
+              return;
+            }
+
             await github.rest.issues.createComment({
               ...context.repo,
               issue_number: context.issue.number,
-              body: '@coderabbitai review',
+              body: `@coderabbitai review\n${marker}`,
             });
