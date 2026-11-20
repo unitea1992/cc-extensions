@@ -43,15 +43,6 @@
         "name": "unitea1992"
       },
       "source": "./plugins/typescript7-lsp"
-    },
-    {
-      "name": "decision-router",
-      "description": "Use local decision models to advise Orca worker dispatch through deterministic Claude hooks.",
-      "version": "0.5.4",
-      "author": {
-        "name": "unitea1992"
-      },
-      "source": "./plugins/decision-router"
     }
   ]
 }
