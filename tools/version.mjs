@@ -17,8 +17,7 @@ const PLUGINS = [
   { name: "opencode", dir: "plugins/opencode" },
   { name: "pi", dir: "plugins/pi" },
   { name: "dsh", dir: "plugins/dsh" },
-  { name: "typescript7-lsp", dir: "plugins/typescript7-lsp" },
-  { name: "decision-router", dir: "plugins/decision-router" }
+  { name: "typescript7-lsp", dir: "plugins/typescript7-lsp" }
 ];
 const CHANGELOG = "CHANGELOG.md";
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
